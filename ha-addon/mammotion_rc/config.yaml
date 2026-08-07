@@ -18,10 +18,10 @@ boot: auto
 # that never survives Docker NAT.
 host_network: true
 # Supervisor restarts the add-on if the web server stops answering.
-# NOTE: if you change the `port` option below, update this line and `webui`
-# to match — they are static and can't read the option.
-watchdog: tcp://[HOST]:8443
-webui: https://[HOST]:8443
+# NOTE: if you change the `port` option below, update the port default in
+# these two macros to match — they are static and can't read the option.
+watchdog: tcp://[HOST]:[PORT:8443]
+webui: https://[HOST]:[PORT:8443]
 options:
   web_username: luba
   web_password: ""
