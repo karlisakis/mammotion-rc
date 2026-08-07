@@ -1000,6 +1000,8 @@ async def _confirm_pending_shares(http: MammotionHTTP) -> None:
     try:
         shared = await http.get_user_shared_device_page()
         records = (shared.data.records if shared.data else None) or []
+        _LOGGER.info("share page: %d record(s): %s", len(records),
+                     [(r.device_name, r.is_receiver, r.status) for r in records])
         pending: dict[str, list[int]] = {}
         for r in records:
             if r.is_receiver == 1 and r.status == -1:
@@ -1079,9 +1081,10 @@ async def _cloud_mowers() -> list[dict]:
             await cloud.check_or_refresh_session(force=True)
             await cloud.list_binding_by_account()
         resp = cloud.devices_by_account_response
-        if resp and resp.data and resp.data.data:
-            for d in resp.data.data:
-                devices.append((d.device_name, d.iot_id, d.product_key or "", d.nick_name or None))
+        rows = resp.data.data if resp and resp.data and resp.data.data else []
+        _LOGGER.info("scan source aliyun-binding: %d device(s)", len(rows))
+        for d in rows:
+            devices.append((d.device_name, d.iot_id, d.product_key or "", d.nick_name or None))
     except Exception as exc:  # noqa: BLE001
         gateway_error = str(exc)
         # Drop the cached session: it may be the reason the listing failed, and
@@ -1093,19 +1096,39 @@ async def _cloud_mowers() -> list[dict]:
         # Fallback: owned device-server list (name + iot_id, no product_key).
         try:
             resp = await http.get_user_device_list()
-            for d in (resp.data or []):
+            rows = resp.data or []
+            _LOGGER.info("scan source device-list(owned): %d device(s)", len(rows))
+            for d in rows:
                 devices.append((d.device_name, d.iot_id, "", None))
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("device-server enumeration failed: %s", exc)
 
     if not devices:
-        # Fallback for share-receiving secondary accounts: the shared-device
-        # page.  The owned list above is empty for them by definition, and this
-        # still works when the Aliyun gateway path is down.  status == -1 means
-        # a share we failed to confirm above — skip those, they're not usable.
+        # Fallback: the paginated device page.  For a share-RECEIVING secondary
+        # account this is where the mower actually appears (owned=0 records,
+        # with product_key for RTK filtering) — the Aliyun binding list and the
+        # owned list are both empty for such accounts even though the phone app
+        # sees and controls the mower fine.
+        try:
+            page = await http.get_user_device_page()
+            recs = (page.data.records if page.data else None) or []
+            _LOGGER.info("scan source device-page: %d record(s): %s", len(recs),
+                         [(r.device_name, r.owned, r.status) for r in recs])
+            for r in recs:
+                if r.device_name:
+                    devices.append((r.device_name, r.iot_id or "", r.product_key or "", None))
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("device-page enumeration failed: %s", exc)
+
+    if not devices:
+        # Last resort for share-receiving accounts: the share records
+        # themselves.  status == -1 means a share we failed to confirm above —
+        # skip those, they're not usable yet.
         try:
             shared = await http.get_user_shared_device_page()
-            for r in (shared.data.records if shared.data else None) or []:
+            recs = (shared.data.records if shared.data else None) or []
+            _LOGGER.info("scan source share-page: %d record(s)", len(recs))
+            for r in recs:
                 if r.device_name and r.status != -1:
                     devices.append((r.device_name, r.iot_id or "", "", None))
         except Exception as exc:  # noqa: BLE001
