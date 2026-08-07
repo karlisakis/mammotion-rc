@@ -987,16 +987,43 @@ async def onboard_login(payload: dict = Body(...)):
     return {"ok": True}
 
 
+async def _confirm_pending_shares(http: MammotionHTTP) -> None:
+    """Accept any pending device-share invitations on this account.
+
+    A mower shared to a secondary account does NOT appear in any device list
+    until the share is confirmed — the phone app confirms silently on login, so
+    a server-only account never gets the chance and every enumeration comes
+    back empty.  Mirrors PyMammotion client.py's login flow (HTTP-level
+    confirm; the Aliyun-side notice list is confirmed separately in
+    _cloud_mowers once a gateway session exists).  Never fatal to the scan.
+    """
+    try:
+        shared = await http.get_user_shared_device_page()
+        records = (shared.data.records if shared.data else None) or []
+        pending: dict[str, list[int]] = {}
+        for r in records:
+            if r.is_receiver == 1 and r.status == -1:
+                pending.setdefault(r.batch_id, []).append(int(r.record_id))
+        for batch_id, record_ids in pending.items():
+            await http.confirm_share(batch_id, record_ids)
+            _LOGGER.info("accepted pending share (batch=%s, %d device(s))",
+                         batch_id, len(record_ids))
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.warning("pending-share check failed (continuing): %s", exc)
+
+
 async def _cloud_mowers() -> list[dict]:
     """Account's mowers (RTK base stations filtered out).
 
     Primary source is the Aliyun binding list (`list_binding_by_account`) — the
     authoritative list for Luba/Yuka devices, where `/device-server/v1/device/list`
-    routinely comes back empty.  Falls back to that endpoint if the gateway
+    routinely comes back empty.  Falls back to that endpoint (and the
+    shared-device page, for share-receiving secondary accounts) if the gateway
     handshake yields nothing.  Each device carries name + iot_id + product_key,
     so RTK filtering uses both.
     """
     http = await _ensure_http()
+    await _confirm_pending_shares(http)
     # (device_name, iot_id, product_key, nickname).  nickname is the friendly
     # name set in the Mammotion app; None when unset or via the fallback path.
     devices: list[tuple[str, str, str, str | None]] = []
@@ -1031,13 +1058,35 @@ async def _cloud_mowers() -> list[dict]:
             await cloud.aep_handle()
             await cloud.session_by_auth_code()
             state.cloud_client = cloud
-        await cloud.list_binding_by_account()
+        # Aliyun-side share notices: like the HTTP share page, a pending share
+        # keeps the device out of the binding list until confirmed.
+        try:
+            notice = await cloud.get_shared_notice_list()
+            if notice.data and notice.data.data:
+                pending = [d.record_id for d in notice.data.data if d.status == -1]
+                if pending:
+                    await cloud.confirm_share(pending)
+                    _LOGGER.info("accepted %d pending Aliyun share notice(s)", len(pending))
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("Aliyun share-notice check failed (continuing): %s", exc)
+        try:
+            await cloud.list_binding_by_account()
+        except Exception as exc:  # noqa: BLE001
+            # Aliyun sometimes rejects a freshly-minted iotToken outright
+            # ("request auth error" minutes after issue).  Upstream's remedy
+            # (client.py) is a forced checkOrRefreshSession, then one retry.
+            _LOGGER.warning("listBindingByAccount failed (%s) — forcing session refresh + retry", exc)
+            await cloud.check_or_refresh_session(force=True)
+            await cloud.list_binding_by_account()
         resp = cloud.devices_by_account_response
         if resp and resp.data and resp.data.data:
             for d in resp.data.data:
                 devices.append((d.device_name, d.iot_id, d.product_key or "", d.nick_name or None))
     except Exception as exc:  # noqa: BLE001
         gateway_error = str(exc)
+        # Drop the cached session: it may be the reason the listing failed, and
+        # keeping it would make every Re-scan reuse the same rejected token.
+        state.cloud_client = None
         _LOGGER.warning("Aliyun device enumeration failed: %s", exc)
 
     if not devices:
@@ -1048,6 +1097,19 @@ async def _cloud_mowers() -> list[dict]:
                 devices.append((d.device_name, d.iot_id, "", None))
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("device-server enumeration failed: %s", exc)
+
+    if not devices:
+        # Fallback for share-receiving secondary accounts: the shared-device
+        # page.  The owned list above is empty for them by definition, and this
+        # still works when the Aliyun gateway path is down.  status == -1 means
+        # a share we failed to confirm above — skip those, they're not usable.
+        try:
+            shared = await http.get_user_shared_device_page()
+            for r in (shared.data.records if shared.data else None) or []:
+                if r.device_name and r.status != -1:
+                    devices.append((r.device_name, r.iot_id or "", "", None))
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("shared-device-page enumeration failed: %s", exc)
 
     if not devices and gateway_error:
         raise HTTPException(502, f"Could not list account devices: {gateway_error}")
