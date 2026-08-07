@@ -123,7 +123,7 @@
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
             <polyline points="9 22 9 12 15 12 15 22"/>
           </svg>
-          <span>Go Home</span>
+          <span>Dock</span>
         </button>
         <button id="undock" class="btn">
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -138,6 +138,59 @@
           </svg>
           <span id="light-label">Light On</span>
         </button>
+      </div>
+    </section>
+
+    <section id="mow-panel">
+      <h2 class="panel-title">Mowing</h2>
+
+      <div class="actions">
+        <button id="start-job" class="btn primary">
+          <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+            <polygon points="6 3 21 12 6 21 6 3"/>
+          </svg>
+          <span>Start Mowing</span>
+        </button>
+        <button id="cancel-job" class="btn">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+          </svg>
+          <span>Cancel Job</span>
+        </button>
+        <!-- Manual mowing: blades while joystick-driving.  Blades On requires a
+             second confirming tap (see app.js); the mower's own lift/tilt/bumper
+             protections still cut the blades regardless of what we send. -->
+        <button id="blades-on" class="btn btn-blades">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 9V2M12 22v-7M9 12H2M22 12h-7" transform="rotate(45 12 12)"/>
+          </svg>
+          <span id="blades-on-label">Blades On</span>
+        </button>
+        <button id="blades-off" class="btn">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <line x1="1" y1="1" x2="23" y2="23"/>
+          </svg>
+          <span>Blades Off</span>
+        </button>
+      </div>
+
+      <div class="setting">
+        <div class="setting-head">
+          <span>Cutting height</span>
+          <span class="setting-val" id="height-val">— mm</span>
+        </div>
+        <input type="range" id="height-slider" min="20" max="100" step="5" value="60"
+               aria-label="Cutting height in millimetres">
+      </div>
+      <div class="setting">
+        <div class="setting-head">
+          <span>Drive speed</span>
+          <span class="setting-val" id="speed-val">— m/s</span>
+        </div>
+        <input type="range" id="speed-slider" min="0.2" max="0.6" step="0.05" value="0.4"
+               aria-label="Working speed in metres per second">
       </div>
     </section>
 

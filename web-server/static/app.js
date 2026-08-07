@@ -30,6 +30,15 @@ const els = {
   stop:     document.getElementById("stop"),
   light:    document.getElementById("light"),
   lightLabel: document.getElementById("light-label"),
+  startJob:      document.getElementById("start-job"),
+  cancelJob:     document.getElementById("cancel-job"),
+  bladesOn:      document.getElementById("blades-on"),
+  bladesOnLabel: document.getElementById("blades-on-label"),
+  bladesOff:     document.getElementById("blades-off"),
+  heightSlider:  document.getElementById("height-slider"),
+  heightVal:     document.getElementById("height-val"),
+  speedSlider:   document.getElementById("speed-slider"),
+  speedVal:      document.getElementById("speed-val"),
   log:       document.getElementById("log"),
   logDrawer: document.getElementById("log-drawer"),
   logToggle: document.getElementById("log-toggle"),
@@ -256,6 +265,21 @@ async function pollStatus(name) {
       setLightLabel();
     }
 
+    // Scale the settings sliders to this model's real limits (available once
+    // the mower has reported its model info), and reflect the reported blade
+    // height — unless the user's thumb is mid-drag on the slider.
+    if (s.limits && limitsFor !== name) {
+      limitsFor = name;
+      els.heightSlider.min = s.limits.blade_height.min;
+      els.heightSlider.max = s.limits.blade_height.max;
+      els.speedSlider.min  = s.limits.working_speed.min;
+      els.speedSlider.max  = s.limits.working_speed.max;
+    }
+    if (typeof s.blade_height === "number" && !heightDragging) {
+      els.heightSlider.value = s.blade_height;
+      els.heightVal.textContent = `${s.blade_height} mm`;
+    }
+
     // Layer 1: HC33 TCP/HaLow socket.  If this is bad, BLE is irrelevant.
     if (s.availability !== "connected") {
       if (s.auto_retrying) {
@@ -394,7 +418,9 @@ els.pause.onclick  = () => action("pause");
 els.resume.onclick = () => action("resume");
 els.dock.onclick   = () => action("dock");
 els.undock.onclick = () => action("undock");
-els.stop.onclick   = () => action("stop");
+// STOP also cuts the blades: stop_and_not_save_task halts motion/task, but a
+// manually-enabled blade state is separate — an emergency stop should end both.
+els.stop.onclick   = () => { disarmBlades(); action("stop"); action("blades-off"); };
 
 // Headlight toggle.  The press is optimistic (flip + send immediately) for a
 // snappy feel; pollStatus then reconciles `lightOn` against the mower's real
@@ -416,6 +442,71 @@ els.light.onclick = async () => {
   // waiting for the regular 3 s cadence.  Guard against a mower switch mid-wait.
   setTimeout(() => { if (currentMower === target) pollStatus(target); }, 1200);
   setTimeout(() => { if (currentMower === target) pollStatus(target); }, 2500);
+};
+
+// ── Mowing: job control, blades, settings ───────────────────────────────────
+els.startJob.onclick  = () => action("start-job");
+els.cancelJob.onclick = () => action("cancel-job");
+
+// Blades On takes a second confirming tap within 3.5 s — blades while
+// manual-driving is the one genuinely dangerous button on this page.  The
+// mower's own lift/tilt/bumper protections still apply regardless of what we
+// send; the mower may also refuse the command when it deems it unsafe.
+let bladesArmTimer = null;
+function disarmBlades() {
+  if (bladesArmTimer) { clearTimeout(bladesArmTimer); bladesArmTimer = null; }
+  els.bladesOn.classList.remove("armed");
+  els.bladesOnLabel.textContent = "Blades On";
+}
+els.bladesOn.onclick = () => {
+  if (!bladesArmTimer) {
+    els.bladesOn.classList.add("armed");
+    els.bladesOnLabel.textContent = "Tap to confirm";
+    bladesArmTimer = setTimeout(disarmBlades, 3500);
+    return;
+  }
+  disarmBlades();
+  action("blades-on");
+};
+els.bladesOff.onclick = () => { disarmBlades(); action("blades-off"); };
+
+// Settings sliders.  'input' previews the value; 'change' (release) applies it
+// via POST /api/set, which clamps to the mower's model limits and echoes back
+// what it actually applied.  Slider bounds come from /api/status's `limits`
+// once the mower has reported its model (per-mower, so a switch re-scales).
+let limitsFor = null;        // mower name the current slider bounds belong to
+let heightDragging = false;  // don't let the 3 s poll fight the user's thumb
+
+async function applySetting(setting, value, labelEl, unit) {
+  if (!currentMower) return;
+  try {
+    const r = await fetch(`/api/set/${encodeURIComponent(currentMower)}/${setting}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    });
+    if (!r.ok) { log(`set ${setting} failed: ${r.status} ${await r.text()}`); return; }
+    const { applied } = await r.json();
+    labelEl.textContent = `${applied} ${unit}`;
+    log(`set ${setting} = ${applied} ${unit}`);
+  } catch (e) {
+    log(`set ${setting} threw: ${e}`);
+  }
+}
+
+els.heightSlider.oninput = () => {
+  heightDragging = true;
+  els.heightVal.textContent = `${els.heightSlider.value} mm`;
+};
+els.heightSlider.onchange = () => {
+  heightDragging = false;
+  applySetting("blade_height", Number(els.heightSlider.value), els.heightVal, "mm");
+};
+els.speedSlider.oninput = () => {
+  els.speedVal.textContent = `${Number(els.speedSlider.value).toFixed(2)} m/s`;
+};
+els.speedSlider.onchange = () => {
+  applySetting("speed", Number(els.speedSlider.value), els.speedVal, "m/s");
 };
 
 // ── Camera ──────────────────────────────────────────────────────────────────

@@ -629,6 +629,14 @@ _ACTIONS = {
     "stop":       ("stop_and_not_save_task", {}),
     "light-on":   ("set_car_manual_light", {"manual_ctrl": True}),
     "light-off":  ("set_car_manual_light", {"manual_ctrl": False}),
+    # Job control: start the mower's planned task / cancel the running one.
+    "start-job":  ("start_job",            {}),
+    "cancel-job": ("cancel_job",           {}),
+    # Manual mowing: spin the blades up/down while driving by joystick.  The
+    # mower's own safety logic still applies (lift/tilt/bumper cut the blades
+    # regardless of what we send).
+    "blades-on":  ("set_blade_control",    {"on_off": 1}),
+    "blades-off": ("set_blade_control",    {"on_off": 0}),
 }
 
 
@@ -649,6 +657,61 @@ async def post_action(name: str, action: str):
         with contextlib.suppress(Exception):
             await h.send_raw(h.commands.get_car_light(1126))
     return {"ok": True}
+
+
+def _device_limits(h) -> "dict | None":
+    """Per-model operating limits (blade height mm, working speed m/s) from
+    pymammotion's device-config table, or None before the mower has reported
+    its model info.  Used to bound the settings endpoint and to scale the UI
+    sliders to what this specific mower supports."""
+    try:
+        limits = h.snapshot.raw.device_limits
+        if limits.blade_height.max <= 0:
+            return None
+        return {
+            "blade_height":  {"min": limits.blade_height.min,  "max": limits.blade_height.max},
+            "working_speed": {"min": limits.working_speed.min, "max": limits.working_speed.max},
+        }
+    except (AttributeError, TypeError):
+        return None
+
+
+def _current_blade_height(h) -> "int | None":
+    """Blade height (mm) from the last work report, or None if not reported.
+    0 means 'not reported yet' on the wire, so it maps to None too."""
+    try:
+        return int(h.snapshot.raw.report_data.work.knife_height) or None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+@app.post("/api/set/{name}/{setting}")
+async def post_setting(name: str, setting: str, payload: dict = Body(...)):
+    """Parameterized mower settings — body {"value": <number>}.
+
+    blade_height: cutting height in mm.  speed: working speed in m/s.  Values
+    are clamped to the mower's own model limits when it has reported them,
+    otherwise to conservative Luba-family bounds, and the applied value is
+    returned so the UI can reflect the clamp.
+    """
+    h = _handle(name)
+    try:
+        value = float(payload.get("value"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'body must be {"value": <number>}')
+    limits = _device_limits(h)
+    if setting == "blade_height":
+        lo, hi = (limits["blade_height"]["min"], limits["blade_height"]["max"]) if limits else (20, 100)
+        v: "int | float" = int(min(max(value, lo), hi))
+        await h.send_raw(h.commands.set_blade_height(int(v)))
+    elif setting == "speed":
+        lo, hi = (limits["working_speed"]["min"], limits["working_speed"]["max"]) if limits else (0.2, 0.6)
+        v = round(min(max(value, lo), hi), 2)
+        await h.send_raw(h.commands.set_speed(float(v)))
+    else:
+        raise HTTPException(400, f"unknown setting {setting!r}")
+    _LOGGER.info("set %s=%s for %s (requested %s)", setting, v, name, value)
+    return {"ok": True, "applied": v}
 
 
 def _current_orientation(h) -> "int | None":
@@ -835,6 +898,8 @@ async def status(name: str):
         "auto_retrying":  state.auto_retrying.get(name, False),
         "auto_gave_up":   state.auto_gave_up.get(name, False),
         "orientation":    _current_orientation(h),  # heading in degrees, or None
+        "blade_height":   _current_blade_height(h),  # mm from last work report, or None
+        "limits":         _device_limits(h),         # per-model slider bounds, or None
     }
 
 
