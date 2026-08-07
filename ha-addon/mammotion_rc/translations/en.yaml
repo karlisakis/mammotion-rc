@@ -1,0 +1,19 @@
+configuration:
+  web_username:
+    name: Web UI username
+    description: Username for the web login. Defaults to "luba".
+  web_password:
+    name: Web UI password
+    description: >-
+      Password gate for the whole UI (pages, API, joystick). Leave empty to run
+      unprotected — anyone who can reach the page can drive your mower, so set one.
+  port:
+    name: HTTPS port
+    description: >-
+      Port the web UI listens on (host network). If you change it, also update
+      the watchdog/webui lines in config.yaml to match.
+  regenerate_cert:
+    name: Regenerate TLS certificate
+    description: >-
+      Turn on and restart to mint a fresh self-signed certificate (e.g. after
+      the Home Assistant box's IP changed). Turn back off afterwards.

@@ -2,112 +2,390 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
   <title>Luba Remote — Setup</title>
-  <link rel="stylesheet" href="/static/style.css">
   <style>
-    main { max-width: 760px; }
-    h1 { font-size: 1.3rem; margin: 0.2rem 0 1rem; }
-    h2 { font-size: 1.05rem; margin: 1.4rem 0 0.5rem; }
-    .step { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 1rem; }
-    .muted { color: #888; font-size: 0.85rem; }
-    .field { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.75rem; }
-    .field label { font-size: 0.85rem; color: #bbb; }
-    input[type=text], input[type=email], input[type=password], input[type=number] {
-      background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 0.5rem;
-      font-size: 0.95rem; width: 100%;
+    :root {
+      --bg: #0b0f14; --surface: #121924; --surface-2: #1a2432;
+      --border: rgba(255,255,255,.07);
+      --text: #e8eef5; --text-dim: #8fa0b3;
+      --accent: #2dd47a; --accent-press: #24b968; --accent-ink: #04371c;
+      --danger: #ff5d5d; --warn: #ffb454; --info: #4aa8ff;
+      --radius: 14px; --radius-sm: 10px;
+      --shadow: 0 8px 28px rgba(0,0,0,.45);
+      --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color-scheme: dark;
     }
-    table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
-    th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #2a2a2a; font-size: 0.85rem; vertical-align: middle; }
-    th { color: #999; font-weight: 600; }
-    td input { font-size: 0.8rem; padding: 0.3rem; }
-    .host-col { width: 130px; } .port-col { width: 72px; } .iot-col { width: 220px; }
-    .pill { display: inline-block; padding: 0.05rem 0.4rem; border-radius: 10px; font-size: 0.7rem; }
-    .pill.halow { background: #1f3a4d; color: #9cf; } .pill.wifi { background: #1f4d2f; color: #9f9; }
-    .err { color: #f77; font-size: 0.85rem; min-height: 1.1rem; margin-top: 0.4rem; }
-    .ok  { color: #7d7; }
-    .rowbar { display: flex; gap: 0.5rem; align-items: center; margin-top: 1rem; }
-    .rowbar .spacer { margin-left: auto; }
-    .note { background: #2a2410; border: 1px solid #4d4520; border-radius: 4px; padding: 0.5rem 0.75rem; font-size: 0.8rem; color: #db5; margin-top: 0.5rem; }
-    .hidden { display: none; }
-    button.primary { background: #1f4d2f; border-color: #2f6e44; }
-    button.primary:hover:not(:disabled) { background: #2f6e44; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text); font-family: var(--font);
+      -webkit-font-smoothing: antialiased; overflow-x: hidden; line-height: 1.4;
+    }
+    .hidden { display: none !important; }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    header {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; padding-top: calc(12px + env(safe-area-inset-top));
+      background: rgba(11,15,20,.88); backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { font-weight: 700; font-size: 1rem; display: flex; align-items: center; gap: 9px; }
+    .brand::before {
+      content: ""; width: 8px; height: 8px; border-radius: 50%; flex: none;
+      background: var(--accent); box-shadow: 0 0 8px rgba(45,212,122,.7);
+    }
+    .brand small { color: var(--text-dim); font-weight: 500; font-size: .8rem; }
+    #status { margin-left: auto; font-size: .78rem; color: var(--text-dim); white-space: nowrap; }
+    #status:not(:empty) {
+      padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px;
+      background: var(--surface);
+    }
+    #back-link {
+      color: var(--info); text-decoration: none; font-size: .9rem; font-weight: 600;
+      padding: 10px 12px; margin: -10px -8px -10px 0; border-radius: var(--radius-sm);
+    }
+    #back-link:active { background: var(--surface-2); }
+
+    /* ── Layout ─────────────────────────────────────────────────────────── */
+    main {
+      max-width: 720px; margin: 0 auto; padding: 16px;
+      padding-bottom: calc(32px + env(safe-area-inset-bottom));
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 6px; letter-spacing: -.01em; }
+    .muted { color: var(--text-dim); font-size: .9rem; line-height: 1.45; margin: 0 0 14px; }
+    code {
+      font-family: var(--mono); font-size: .85em;
+      background: var(--surface-2); padding: 1px 5px; border-radius: 5px;
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px 16px; box-shadow: var(--shadow);
+    }
+    .err {
+      color: var(--danger); font-size: .88rem; min-height: 1.2em; margin-top: 10px;
+      overflow-wrap: anywhere;
+    }
+    .note {
+      background: rgba(255,180,84,.08); border: 1px solid rgba(255,180,84,.3);
+      border-radius: var(--radius-sm); padding: 10px 12px; font-size: .85rem;
+      color: var(--warn); margin: 0 0 16px; line-height: 1.45;
+    }
+    .note strong { color: var(--warn); }
+
+    /* ── Stepper ────────────────────────────────────────────────────────── */
+    ol.stepper {
+      list-style: none; display: flex; margin: 18px 0 22px; padding: 0;
+    }
+    .stepper li {
+      flex: 1; display: flex; flex-direction: column; align-items: center; gap: 7px;
+      position: relative;
+    }
+    .stepper li:not(:first-child)::before {
+      content: ""; position: absolute; top: 15px;
+      left: calc(-50% + 24px); right: calc(50% + 24px);
+      border-top: 2px solid var(--surface-2);
+    }
+    .stepper li[data-state="done"]::before,
+    .stepper li[data-state="active"]::before { border-color: rgba(45,212,122,.5); }
+    .stepper .dot {
+      width: 30px; height: 30px; border-radius: 50%; z-index: 1;
+      display: flex; align-items: center; justify-content: center;
+      font-size: .85rem; font-weight: 700;
+      background: var(--surface-2); color: var(--text-dim);
+      border: 1px solid var(--border); transition: all .2s;
+    }
+    .stepper li[data-state="active"] .dot {
+      background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(45,212,122,.18);
+    }
+    .stepper li[data-state="done"] .dot {
+      background: rgba(45,212,122,.15); color: var(--accent); border-color: rgba(45,212,122,.4);
+    }
+    .stepper li[data-state="done"] .dot .n { display: none; }
+    .stepper li[data-state="done"] .dot::before { content: "✓"; }
+    .stepper .slab {
+      font-size: .7rem; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--text-dim); font-weight: 600; text-align: center;
+    }
+    .stepper li[data-state="active"] .slab { color: var(--text); }
+    .stepper li[data-state="done"] .slab { color: var(--accent); }
+
+    /* ── Forms / inputs ─────────────────────────────────────────────────── */
+    .field { display: block; margin: 0 0 12px; min-width: 0; }
+    .flab { display: block; font-size: .78rem; color: var(--text-dim); margin-bottom: 5px; font-weight: 600; }
+    .tin {
+      width: 100%; min-height: 44px; padding: 10px 12px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text);
+      font: inherit; font-size: 16px;
+    }
+    .tin.mono { font-family: var(--mono); font-size: 14px; }
+    .tin::placeholder { color: var(--text-dim); opacity: .6; }
+    .tin:focus {
+      outline: none; border-color: rgba(45,212,122,.6);
+      box-shadow: 0 0 0 3px rgba(45,212,122,.15);
+    }
+    .duo { display: grid; grid-template-columns: 1fr 92px; gap: 8px; }
+
+    /* ── Buttons ────────────────────────────────────────────────────────── */
+    .btn {
+      min-height: 46px; padding: 0 18px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+      font: inherit; font-weight: 650; font-size: .95rem; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+      transition: background .12s, opacity .12s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:disabled { opacity: .5; cursor: default; }
+    .btn:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+    .btn.primary:active:not(:disabled) { background: var(--accent-press); }
+    .btn.ghost { background: transparent; }
+    .btn.block { width: 100%; }
+    .spin {
+      display: none; width: 16px; height: 16px; border-radius: 50%; flex: none;
+      border: 2px solid transparent;
+      border-top-color: currentColor; border-right-color: currentColor;
+      animation: rot .7s linear infinite;
+    }
+    .btn.loading .spin { display: inline-block; }
+    @keyframes rot { to { transform: rotate(360deg); } }
+
+    /* ── Include switch ─────────────────────────────────────────────────── */
+    label.switch {
+      position: relative; flex: none; width: 52px; height: 32px;
+      border-radius: 16px; background: var(--surface-2);
+      border: 1px solid var(--border); cursor: pointer; transition: background .15s;
+    }
+    .switch input {
+      appearance: none; -webkit-appearance: none;
+      position: absolute; inset: -8px; width: auto; height: auto;
+      margin: 0; opacity: 0; cursor: pointer;   /* oversized hit area ≥44px */
+    }
+    .switch .knob {
+      position: absolute; top: 3px; left: 3px; width: 24px; height: 24px;
+      border-radius: 50%; background: var(--text-dim);
+      transition: transform .15s, background .15s; pointer-events: none;
+    }
+    .switch input:checked ~ .knob { transform: translateX(20px); background: var(--accent-ink); }
+    .switch:has(input:checked) { background: var(--accent); border-color: var(--accent); }
+    .switch:has(input:focus-visible) { outline: 2px solid var(--info); outline-offset: 2px; }
+
+    /* ── Scan hero (radar) ──────────────────────────────────────────────── */
+    .scan-hero { text-align: center; padding: 36px 16px 32px; }
+    .radar {
+      width: 112px; height: 112px; margin: 0 auto 18px; border-radius: 50%;
+      position: relative; overflow: hidden;
+      border: 1px solid rgba(45,212,122,.28);
+      background:
+        repeating-radial-gradient(circle at 50% 50%, transparent 0 17px, rgba(45,212,122,.12) 17px 18px),
+        radial-gradient(circle at 50% 50%, rgba(45,212,122,.12), rgba(45,212,122,0) 72%);
+    }
+    .radar::before {
+      content: ""; position: absolute; inset: 0; border-radius: 50%;
+      background: conic-gradient(from 0deg,
+        rgba(45,212,122,.5), rgba(45,212,122,.12) 55deg, transparent 95deg);
+      animation: rot 1.9s linear infinite;
+    }
+    .radar::after {
+      content: ""; position: absolute; left: 50%; top: 50%;
+      width: 6px; height: 6px; margin: -3px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 8px rgba(45,212,122,.8);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .radar::before { animation: none; opacity: .5; }
+      .spin { animation-duration: 2.5s; }
+    }
+
+    /* ── Sections & result cards ────────────────────────────────────────── */
+    .sec-h {
+      display: flex; align-items: center; gap: 8px;
+      font-size: .76rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+      color: var(--text-dim); margin: 24px 0 10px;
+    }
+    .sec-h .count {
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 999px; padding: 1px 9px; font-size: .72rem; color: var(--text);
+    }
+    .empty {
+      color: var(--text-dim); font-size: .88rem;
+      background: var(--surface); border: 1px dashed rgba(255,255,255,.14);
+      border-radius: var(--radius-sm); padding: 13px 14px; margin: 0;
+    }
+
+    .pair-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow);
+      transition: opacity .15s;
+    }
+    .pair-card + .pair-card, .proxy-row + .proxy-row { margin-top: 12px; }
+    .pair-card.off { opacity: .6; }
+    .pair-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .pair-title {
+      flex: 1; min-width: 0; font-weight: 700; font-size: 1rem; overflow-wrap: anywhere;
+    }
+    .pair-title small { display: block; font-weight: 500; font-size: .76rem; color: var(--text-dim); margin-top: 2px; }
+
+    .pair-body { display: grid; gap: 10px; grid-template-columns: 1fr; min-width: 0; }
+    .side {
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 11px 11px 3px; min-width: 0;
+    }
+    .side .field:last-child { margin-bottom: 8px; }
+    .side-kicker {
+      display: flex; align-items: center; gap: 7px; margin-bottom: 9px;
+      font-size: .66rem; font-weight: 700; letter-spacing: .11em; text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .side-kicker .mono { font-size: .74rem; letter-spacing: 0; text-transform: none; }
+    .mono { font-family: var(--mono); overflow-wrap: anywhere; }
+
+    .connector {
+      display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0;
+    }
+    .connector::before, .connector::after {
+      content: ""; flex: 1; border-top: 1px dashed rgba(45,212,122,.45);
+    }
+    .linkchip {
+      flex: none; font-size: .64rem; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--accent);
+      border: 1px solid rgba(45,212,122,.4); border-radius: 999px; padding: 3px 9px;
+      background: rgba(45,212,122,.08);
+    }
+    @media (min-width: 640px) {
+      .pair-card:not(.manual) .pair-body { grid-template-columns: 1fr 76px 1fr; }
+      .pair-card:not(.manual) .connector { flex-direction: column; }
+      .pair-card:not(.manual) .connector::before,
+      .pair-card:not(.manual) .connector::after {
+        border-top: none; border-left: 1px dashed rgba(45,212,122,.45);
+        width: 0; min-height: 12px;
+      }
+    }
+
+    .badge {
+      flex: none; padding: 2px 9px; border-radius: 999px;
+      font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    }
+    .badge.wifi  { background: rgba(45,212,122,.14); color: var(--accent); border: 1px solid rgba(45,212,122,.35); }
+    .badge.halow { background: rgba(74,168,255,.14); color: var(--info);   border: 1px solid rgba(74,168,255,.35); }
+    .badge.unknown { background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border); }
+
+    .manual-zone { margin-top: 2px; }
+    .manual-zone .btn { font-size: .88rem; }
+    .manual-hint { font-size: .78rem; color: var(--text-dim); margin: 8px 0 0; }
+
+    .proxy-row {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 12px 13px;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 7px 10px;
+    }
+    .proxy-row .addr { color: var(--text-dim); font-size: .85rem; }
+    .proxy-row .chip { font-size: .88rem; font-weight: 600; }
+    .proxy-note { flex-basis: 100%; font-size: .82rem; color: var(--text-dim); line-height: 1.45; }
+    .proxy-note.warn { color: var(--warn); }
+
+    .rowbar { display: flex; gap: 10px; margin-top: 20px; }
+    .rowbar .btn.primary { flex: 1; }
   </style>
 </head>
 <body>
   <header>
-    <strong>Luba Remote — Setup</strong>
-    <span id="status" class="spacer"></span>
-    <a href="/" id="back-link" class="hidden" style="margin-left:auto;color:#9cf;">← Back</a>
+    <div class="brand">Luba Remote <small>Setup</small></div>
+    <span id="status" role="status" aria-live="polite"></span>
+    <a href="/" id="back-link" class="hidden">&larr; Back</a>
   </header>
 
   <main>
+    <ol class="stepper" aria-label="Setup progress">
+      <li id="st1" data-state="active"><span class="dot"><span class="n">1</span></span><span class="slab">Sign in</span></li>
+      <li id="st2" data-state="todo"><span class="dot"><span class="n">2</span></span><span class="slab">Scan &amp; pair</span></li>
+      <li id="st3" data-state="todo"><span class="dot"><span class="n">3</span></span><span class="slab">Save</span></li>
+    </ol>
 
     <!-- Step 1: login -->
-    <section id="step-login" class="step hidden">
+    <section id="step-login" class="card hidden">
       <h1>Sign in to Mammotion</h1>
-      <p class="muted">Your account email/password. Used to look up your mowers and (later)
-        the camera. Stored locally in <code>secrets.toml</code> — never sent anywhere but Mammotion.</p>
-      <div class="note">⚠️ Use a <strong>secondary</strong> Mammotion account, not your main one.
+      <p class="muted">Your account email and password are used to look up your mowers and
+        (later) the camera. Stored locally in <code>secrets.toml</code> — never sent anywhere
+        but Mammotion.</p>
+      <div class="note">&#9888;&#65039; Use a <strong>secondary</strong> Mammotion account, not your main one.
         Signing in here can log your phone app out, and heavy use risks the account being
         temporarily blocked. Create a separate account and share your mower with it from the app.</div>
-      <div class="field">
-        <label for="email">Email</label>
-        <input id="email" type="email" autocomplete="username">
-      </div>
-      <div class="field">
-        <label for="password">Password</label>
-        <input id="password" type="password" autocomplete="current-password">
-      </div>
-      <button id="login-btn" class="primary">Sign in &amp; scan</button>
-      <div id="login-err" class="err"></div>
+      <form id="login-form" novalidate>
+        <div class="field">
+          <label class="flab" for="email">Email</label>
+          <input id="email" class="tin" type="email" autocomplete="username"
+                 inputmode="email" autocapitalize="none" spellcheck="false">
+        </div>
+        <div class="field">
+          <label class="flab" for="password">Password</label>
+          <input id="password" class="tin" type="password" autocomplete="current-password">
+        </div>
+        <button id="login-btn" type="submit" class="btn primary block">
+          <span class="spin" aria-hidden="true"></span>Sign in &amp; scan
+        </button>
+        <div id="login-err" class="err" role="alert"></div>
+      </form>
     </section>
 
-    <!-- Step 2: scan results -->
-    <section id="step-scan" class="step hidden">
-      <h1>Found mowers &amp; proxies</h1>
-      <p class="muted">Auto-matched by the proxy's bonded mower name. Adjust host/port if needed,
-        untick anything you don't want, then save.</p>
+    <!-- Step 2: scan & pair -->
+    <section id="step-scan" class="hidden">
 
-      <h2>Matched</h2>
-      <table id="matched-table">
-        <thead><tr><th>Use</th><th>Mower</th><th>Nickname</th><th class="iot-col">iot_id</th>
-          <th class="host-col">Proxy host</th><th class="port-col">Port</th><th>Proxy</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <p id="matched-empty" class="muted hidden">No proxies auto-matched a cloud mower.</p>
+      <div id="scan-progress" class="card scan-hero">
+        <div class="radar" aria-hidden="true"></div>
+        <h1>Scanning your network</h1>
+        <p class="muted" style="margin:0">Probing proxies and scanning your LAN — up to ~10&nbsp;s.</p>
+      </div>
 
-      <h2>Cloud mowers without a proxy</h2>
-      <p class="muted">Discovered in your account but no HC33 reported them. Enter a host to include one manually.</p>
-      <table id="unmatched-mowers-table">
-        <thead><tr><th>Use</th><th>Mower</th><th>Nickname</th><th class="iot-col">iot_id</th>
-          <th class="host-col">Proxy host</th><th class="port-col">Port</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <p id="um-empty" class="muted hidden">All your mowers were matched.</p>
+      <div id="scan-results" class="hidden">
+        <h1>Pair mowers with proxies</h1>
+        <p class="muted">Auto-matched by the proxy's bonded mower name. Adjust host or port if
+          needed, switch off anything you don't want, then save.</p>
 
-      <h2>Unmatched proxies</h2>
-      <table id="unmatched-proxies-table">
-        <thead><tr><th>chip_id</th><th>IP</th><th>Proxy</th><th>Bonded to</th><th>Note</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <p id="up-empty" class="muted hidden">No leftover proxies on the network.</p>
+        <div class="sec-h">Matched <span id="matched-count" class="count">0</span></div>
+        <div id="matched-list"></div>
+        <p id="matched-empty" class="empty hidden">No proxies auto-matched a cloud mower.</p>
+
+        <div class="sec-h">Cloud mowers without a proxy <span id="um-count" class="count">0</span></div>
+        <div id="unmatched-mowers-list"></div>
+        <p id="um-empty" class="empty hidden">All your mowers were matched.</p>
+
+        <div class="sec-h">Proxies without a match <span id="up-count" class="count">0</span></div>
+        <div id="unmatched-proxies-list"></div>
+        <p id="up-empty" class="empty hidden">No leftover proxies on the network.</p>
+      </div>
 
       <div class="rowbar">
-        <button id="rescan-btn">Re-scan</button>
-        <span class="spacer"></span>
-        <button id="save-btn" class="primary">Save &amp; connect</button>
+        <button id="rescan-btn" class="btn" disabled>
+          <span class="spin" aria-hidden="true"></span>Re-scan
+        </button>
+        <button id="save-btn" class="btn primary" disabled>
+          <span class="spin" aria-hidden="true"></span>Save &amp; connect
+        </button>
       </div>
-      <div id="scan-err" class="err"></div>
+      <div id="scan-err" class="err" role="alert"></div>
     </section>
-
   </main>
 
   <script>
+    "use strict";
     const $ = (id) => document.getElementById(id);
-    const statusEl = $("status");
 
-    function setStatus(text) { statusEl.textContent = text; }
+    function setStatus(text) { $("status").textContent = text; }
+    function setStep(n) {
+      [1, 2, 3].forEach((i) => {
+        $("st" + i).dataset.state = i < n ? "done" : (i === n ? "active" : "todo");
+      });
+    }
+    function setLoading(btn, on) {
+      btn.disabled = on;
+      btn.classList.toggle("loading", on);
+    }
 
     async function jget(url) {
       const r = await fetch(url);
@@ -124,6 +402,52 @@
       return data;
     }
 
+    // ── DOM helpers ───────────────────────────────────────────────────────
+    function el(tag, cls, text) {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+    function fieldEl(labelText, input) {
+      const wrap = el("label", "field");
+      wrap.appendChild(el("span", "flab", labelText));
+      wrap.appendChild(input);
+      return wrap;
+    }
+    function textInput(cls, value, opts) {
+      const inp = el("input", "tin " + cls);
+      inp.type = (opts && opts.type) || "text";
+      inp.value = value ?? "";
+      if (opts && opts.placeholder) inp.placeholder = opts.placeholder;
+      if (opts && opts.mono) inp.classList.add("mono");
+      if (inp.type === "number") { inp.min = 1; inp.max = 65535; inp.inputMode = "numeric"; }
+      else { inp.autocapitalize = "none"; inp.spellcheck = false; inp.autocomplete = "off"; }
+      return inp;
+    }
+    function switchEl(checked, ariaLabel) {
+      const lab = el("label", "switch");
+      const c = document.createElement("input");
+      c.type = "checkbox"; c.checked = !!checked; c.className = "include";
+      if (ariaLabel) c.setAttribute("aria-label", ariaLabel);
+      lab.appendChild(c);
+      lab.appendChild(el("span", "knob"));
+      return lab;
+    }
+    function badge(variant) {
+      const v = variant === "halow" ? "halow" : (variant === "wifi" ? "wifi" : "unknown");
+      return el("span", "badge " + v, variant || "?");
+    }
+    function hostPortDuo(host, port) {
+      const duo = el("div", "duo");
+      const hostInp = textInput("host", host ?? "", {placeholder: "192.168.1.50", mono: true});
+      const portInp = textInput("port", port ?? 9876, {type: "number", mono: true});
+      const hf = fieldEl("Proxy host", hostInp);
+      const pf = fieldEl("Port", portInp);
+      duo.appendChild(hf); duo.appendChild(pf);
+      return {duo, hostInp};
+    }
+
     // ── boot ──────────────────────────────────────────────────────────────
     async function boot() {
       const st = await jget("/api/onboard/status");
@@ -136,17 +460,20 @@
         // First run — always ask for credentials explicitly, even if EMAIL /
         // PASSWORD env vars are present.  Pre-fill the email if we have a hint.
         if (st.suggested_email) $("email").value = st.suggested_email;
+        setStep(1);
         $("step-login").classList.remove("hidden");
+        ($("email").value ? $("password") : $("email")).focus();
       }
     }
 
     // ── login ─────────────────────────────────────────────────────────────
-    $("login-btn").addEventListener("click", async () => {
+    $("login-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
       $("login-err").textContent = "";
       const email = $("email").value.trim();
       const password = $("password").value;
       if (!email || !password) { $("login-err").textContent = "Enter email and password."; return; }
-      $("login-btn").disabled = true; setStatus("signing in…");
+      setLoading($("login-btn"), true); setStatus("signing in…");
       try {
         const res = await jpost("/api/onboard/login", {email, password});
         if (!res.ok) { $("login-err").textContent = res.error || "Login failed."; return; }
@@ -155,117 +482,185 @@
       } catch (e) {
         $("login-err").textContent = String(e);
       } finally {
-        $("login-btn").disabled = false; setStatus("");
+        setLoading($("login-btn"), false); setStatus("");
       }
     });
 
     // ── scan ──────────────────────────────────────────────────────────────
-    function cell(text) { const td = document.createElement("td"); td.textContent = text ?? ""; return td; }
-    function inputCell(value, cls, type) {
-      const td = document.createElement("td");
-      const inp = document.createElement("input");
-      inp.type = type || "text"; inp.value = value ?? ""; if (cls) inp.className = cls;
-      td.appendChild(inp); return td;
-    }
-    function checkCell(checked) {
-      const td = document.createElement("td");
-      const c = document.createElement("input"); c.type = "checkbox"; c.checked = !!checked;
-      td.appendChild(c); return td;
-    }
-    function proxyPill(variant) {
-      const s = document.createElement("span");
-      s.className = "pill " + (variant === "halow" ? "halow" : "wifi");
-      s.textContent = variant || "?"; return s;
-    }
+    let scannedOnce = false;
 
     async function runScan() {
+      setStep(2);
       $("step-scan").classList.remove("hidden");
-      setStatus("scanning…"); $("scan-err").textContent = "";
-      $("save-btn").disabled = true; $("rescan-btn").disabled = true;
+      $("scan-progress").classList.remove("hidden");
+      $("scan-results").classList.add("hidden");
+      $("scan-err").textContent = "";
+      $("save-btn").disabled = true;
+      setLoading($("rescan-btn"), true);
+      setStatus("scanning…");
       try {
         const data = await jget("/api/onboard/scan");
         renderMatched(data.matched);
         renderUnmatchedMowers(data.unmatched_mowers);
         renderUnmatchedProxies(data.unmatched_proxies);
+        scannedOnce = true;
+        $("scan-results").classList.remove("hidden");
         $("save-btn").disabled = false;
       } catch (e) {
         $("scan-err").textContent = String(e);
+        // Keep the previous results (if any) on screen after a failed re-scan.
+        if (scannedOnce) $("scan-results").classList.remove("hidden");
       } finally {
-        setStatus(""); $("rescan-btn").disabled = false;
+        $("scan-progress").classList.add("hidden");
+        setLoading($("rescan-btn"), false);
+        setStatus("");
       }
     }
     $("rescan-btn").addEventListener("click", runScan);
 
+    function wireIncludeToggle(card) {
+      const c = card.querySelector("input.include");
+      const sync = () => card.classList.toggle("off", !c.checked);
+      c.addEventListener("change", sync);
+      sync();
+    }
+
+    function matchedCard(m) {
+      const card = el("article", "pair-card");
+      card.dataset.kind = "matched";
+      card.dataset.name = m.name;
+
+      const head = el("div", "pair-head");
+      const title = el("div", "pair-title", m.name);
+      title.appendChild(el("small", null, "Include this mower"));
+      head.appendChild(title);
+      head.appendChild(switchEl(true, "Include " + m.name));
+      card.appendChild(head);
+
+      const body = el("div", "pair-body");
+
+      const mower = el("div", "side");
+      mower.appendChild(el("div", "side-kicker", "Mower"));
+      mower.appendChild(fieldEl("Nickname", textInput("nick", m.nickname || "", {placeholder: "optional"})));
+      mower.appendChild(fieldEl("iot_id", textInput("iot", m.iot_id || "", {mono: true})));
+      body.appendChild(mower);
+
+      const conn = el("div", "connector");
+      conn.appendChild(el("span", "linkchip", "linked"));
+      body.appendChild(conn);
+
+      const proxy = el("div", "side");
+      const kick = el("div", "side-kicker", "Proxy ");
+      kick.appendChild(badge(m.variant));
+      kick.appendChild(el("span", "mono", m.chip_id || ""));
+      proxy.appendChild(kick);
+      const {duo} = hostPortDuo(m.hc33_host, m.hc33_port);
+      proxy.appendChild(duo);
+      body.appendChild(proxy);
+
+      card.appendChild(body);
+      wireIncludeToggle(card);
+      return card;
+    }
+
+    function manualCard(m) {
+      const card = el("article", "pair-card manual");
+      card.dataset.kind = "manual";
+      card.dataset.name = m.name;
+
+      const head = el("div", "pair-head");
+      const title = el("div", "pair-title", m.name);
+      title.appendChild(el("small", null, "No proxy discovered for this mower"));
+      head.appendChild(title);
+      head.appendChild(switchEl(false, "Include " + m.name));
+      card.appendChild(head);
+
+      const body = el("div", "pair-body");
+      const mower = el("div", "side");
+      mower.appendChild(el("div", "side-kicker", "Mower"));
+      mower.appendChild(fieldEl("Nickname", textInput("nick", m.nickname || "", {placeholder: "optional"})));
+      mower.appendChild(fieldEl("iot_id", textInput("iot", m.iot_id || "", {mono: true})));
+      body.appendChild(mower);
+
+      const zone = el("div", "manual-zone");
+      const pairBtn = el("button", "btn ghost", "Pair manually");
+      pairBtn.type = "button";
+      const fields = el("div", "hidden");
+      const {duo, hostInp} = hostPortDuo("", 9876);
+      const proxySide = el("div", "side");
+      const kick = el("div", "side-kicker", "Proxy — entered by hand");
+      proxySide.appendChild(kick);
+      proxySide.appendChild(duo);
+      fields.appendChild(proxySide);
+      zone.appendChild(pairBtn);
+      zone.appendChild(el("p", "manual-hint", "Know the HC33's address? Enter its host and port by hand to include this mower."));
+      zone.appendChild(fields);
+      body.appendChild(zone);
+      card.appendChild(body);
+
+      pairBtn.addEventListener("click", () => {
+        pairBtn.classList.add("hidden");
+        fields.classList.remove("hidden");
+        const c = card.querySelector("input.include");
+        c.checked = true;
+        c.dispatchEvent(new Event("change"));
+        hostInp.focus();
+      });
+
+      wireIncludeToggle(card);
+      return card;
+    }
+
+    function proxyRow(p) {
+      const row = el("div", "proxy-row");
+      row.appendChild(badge(p.variant));
+      row.appendChild(el("span", "chip mono", p.chip_id || "?"));
+      row.appendChild(el("span", "addr mono", `${p.ip}:${p.proxy_port ?? 9876}`));
+      const bonded = p.bonded_name;
+      let note;
+      if (!bonded || bonded === "none") {
+        note = el("div", "proxy-note warn",
+          "Not bonded — mower not found in BLE range. Power it on near the HC33, then Re-scan.");
+      } else {
+        note = el("div", "proxy-note",
+          `Bonded to “${bonded}” — a mower not in this account.`);
+      }
+      row.appendChild(note);
+      return row;
+    }
+
     function renderMatched(rows) {
-      const tb = $("matched-table").querySelector("tbody"); tb.innerHTML = "";
+      const list = $("matched-list"); list.innerHTML = "";
+      $("matched-count").textContent = rows.length;
       $("matched-empty").classList.toggle("hidden", rows.length > 0);
-      for (const m of rows) {
-        const tr = document.createElement("tr");
-        tr.dataset.kind = "matched";
-        tr.dataset.name = m.name; tr.dataset.iot = m.iot_id || "";
-        tr.appendChild(checkCell(true));
-        tr.appendChild(cell(m.name));
-        tr.appendChild(inputCell(m.nickname || "", "nick"));
-        tr.appendChild(inputCell(m.iot_id || "", "iot"));
-        tr.appendChild(inputCell(m.hc33_host, "host"));
-        tr.appendChild(inputCell(m.hc33_port, "port", "number"));
-        const pc = document.createElement("td");
-        pc.appendChild(proxyPill(m.variant)); pc.append(" " + (m.chip_id || ""));
-        tr.appendChild(pc);
-        tb.appendChild(tr);
-      }
+      for (const m of rows) list.appendChild(matchedCard(m));
     }
-
     function renderUnmatchedMowers(rows) {
-      const tb = $("unmatched-mowers-table").querySelector("tbody"); tb.innerHTML = "";
+      const list = $("unmatched-mowers-list"); list.innerHTML = "";
+      $("um-count").textContent = rows.length;
       $("um-empty").classList.toggle("hidden", rows.length > 0);
-      for (const m of rows) {
-        const tr = document.createElement("tr");
-        tr.dataset.kind = "manual";
-        tr.dataset.name = m.name; tr.dataset.iot = m.iot_id || "";
-        tr.appendChild(checkCell(false));
-        tr.appendChild(cell(m.name));
-        tr.appendChild(inputCell(m.nickname || "", "nick"));
-        tr.appendChild(inputCell(m.iot_id || "", "iot"));
-        tr.appendChild(inputCell("", "host"));
-        tr.appendChild(inputCell(9876, "port", "number"));
-        tb.appendChild(tr);
-      }
+      for (const m of rows) list.appendChild(manualCard(m));
     }
-
     function renderUnmatchedProxies(rows) {
-      const tb = $("unmatched-proxies-table").querySelector("tbody"); tb.innerHTML = "";
+      const list = $("unmatched-proxies-list"); list.innerHTML = "";
+      $("up-count").textContent = rows.length;
       $("up-empty").classList.toggle("hidden", rows.length > 0);
-      for (const p of rows) {
-        const tr = document.createElement("tr");
-        tr.appendChild(cell(p.chip_id));
-        tr.appendChild(cell(p.ip));
-        const pc = document.createElement("td"); pc.appendChild(proxyPill(p.variant)); tr.appendChild(pc);
-        tr.appendChild(cell(p.bonded_name));
-        let note;
-        if (!p.bonded_name || p.bonded_name === "none")
-          note = "Mower not found in BLE range — power it on near the HC33, then re-scan.";
-        else
-          note = "Bonded to a mower not in this account.";
-        tr.appendChild(cell(note));
-        tb.appendChild(tr);
-      }
+      for (const p of rows) list.appendChild(proxyRow(p));
     }
 
     // ── save ──────────────────────────────────────────────────────────────
     function collectRows() {
       const out = [];
-      document.querySelectorAll("#matched-table tbody tr, #unmatched-mowers-table tbody tr").forEach((tr) => {
-        const checked = tr.querySelector('input[type=checkbox]').checked;
-        if (!checked) return;
-        const host = tr.querySelector("input.host").value.trim();
+      document.querySelectorAll("#matched-list .pair-card, #unmatched-mowers-list .pair-card").forEach((card) => {
+        if (!card.querySelector("input.include").checked) return;
+        const host = card.querySelector("input.host").value.trim();
         if (!host) return;  // can't include without a host
         out.push({
-          name:      tr.dataset.name,
-          nickname:  tr.querySelector("input.nick").value.trim() || null,
-          iot_id:    tr.querySelector("input.iot").value.trim() || null,
+          name:      card.dataset.name,
+          nickname:  card.querySelector("input.nick").value.trim() || null,
+          iot_id:    card.querySelector("input.iot").value.trim() || null,
           hc33_host: host,
-          hc33_port: parseInt(tr.querySelector("input.port").value, 10) || 9876,
+          hc33_port: parseInt(card.querySelector("input.port").value, 10) || 9876,
         });
       });
       return out;
@@ -275,21 +670,32 @@
       $("scan-err").textContent = "";
       const mowers = collectRows();
       if (mowers.length === 0) {
-        $("scan-err").textContent = "Tick at least one mower with a proxy host before saving.";
+        $("scan-err").textContent = "Switch on at least one mower with a proxy host before saving.";
         return;
       }
-      $("save-btn").disabled = true; setStatus("saving…");
+      setStep(3);
+      setLoading($("save-btn"), true);
+      $("rescan-btn").disabled = true;
+      setStatus("saving…");
       try {
         const res = await jpost("/api/onboard/save", {mowers});
-        if (res.ok) { setStatus("done"); window.location.href = "/"; }
+        if (res.ok) { setStatus("done"); window.location.href = "/"; return; }
+        setStep(2);
       } catch (e) {
-        $("scan-err").textContent = String(e); $("save-btn").disabled = false;
+        $("scan-err").textContent = String(e);
+        setStep(2);
       } finally {
+        setLoading($("save-btn"), false);
+        $("rescan-btn").disabled = false;
         setStatus("");
       }
     });
 
-    boot().catch((e) => { $("step-login").classList.remove("hidden"); $("login-err").textContent = String(e); });
+    boot().catch((e) => {
+      setStep(1);
+      $("step-login").classList.remove("hidden");
+      $("login-err").textContent = String(e);
+    });
   </script>
 </body>
 </html>

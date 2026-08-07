@@ -190,6 +190,19 @@ the mower while you're away from home, expose it beyond the LAN with one of:
 Tunnel setup and how to obtain a trusted certificate are in
 [`web-server/README.md`](web-server/README.md).
 
+## Home Assistant add-on (always-on hosting)
+
+Instead of keeping a PC running, the web server can run 24/7 on a Home
+Assistant OS box (e.g. HA Green / Yellow) as a **local add-on** — auto-start on
+boot, watchdog restarts, state that survives updates. The add-on lives in
+[`ha-addon/mammotion_rc/`](ha-addon/mammotion_rc/): copy that folder to
+`/addons/` on the HA box and install it from the Add-on Store's *Local add-ons*
+section. Full walkthrough in
+[`ha-addon/mammotion_rc/DOCS.md`](ha-addon/mammotion_rc/DOCS.md).
+
+> Run **one** server per mower — each HC33 accepts a single TCP client, so
+> stop any PC/NAS instance before starting the add-on.
+
 ## Building from source
 
 Most people never need this — the browser flasher ships prebuilt firmware and

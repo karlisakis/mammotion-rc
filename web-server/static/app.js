@@ -15,7 +15,8 @@ const els = {
   battery:  document.getElementById("battery"),
   mowerStatus: document.getElementById("mower-status"),
   mowerError:  document.getElementById("mower-error"),
-  video:    document.getElementById("video"),
+  video:      document.getElementById("video"),
+  videoFrame: document.getElementById("video-frame"),
   camStart: document.getElementById("cam-start"),
   camStop:  document.getElementById("cam-stop"),
   compass:        document.getElementById("compass"),
@@ -28,7 +29,10 @@ const els = {
   undock:   document.getElementById("undock"),
   stop:     document.getElementById("stop"),
   light:    document.getElementById("light"),
-  log:      document.getElementById("log"),
+  lightLabel: document.getElementById("light-label"),
+  log:       document.getElementById("log"),
+  logDrawer: document.getElementById("log-drawer"),
+  logToggle: document.getElementById("log-toggle"),
 };
 
 const log = (msg) => {
@@ -49,6 +53,7 @@ const nick = (name) => {
 
 const setStatus = (text, cls) => {
   els.status.textContent = text;
+  els.status.title = text;   // the chip ellipsizes; full text on hover/long-press
   els.status.classList.remove("connected", "connecting", "disconnected");
   if (cls) els.status.classList.add(cls);
 };
@@ -68,13 +73,27 @@ const setBattery = (pct, charging) => {
 };
 
 // Render the mower state chip ("Mowing", "Charging", …) and any fault message
-// next to the battery.  null → hidden (:empty CSS).  Cleared when the link is
-// down so we never show a stale state.  The full fault text is on the title
-// attribute so a truncated message is readable on hover.
+// in the warn banner under the header.  null → hidden (:empty CSS).  Cleared
+// when the link is down so we never show a stale state.  The full fault text is
+// on the title attribute, and tapping the banner expands the clamped message.
 const setMowerState = (label, error) => {
   els.mowerStatus.textContent = label || "";
   els.mowerError.textContent  = error ? `⚠ ${error}` : "";
   els.mowerError.title        = error || "Mower fault";
+};
+
+// Visual state of the camera card: "off" → placeholder, "joining" → spinner,
+// "live" → video.  Purely cosmetic — it never gates the Agora logic.
+const setCamUI = (state) => {
+  els.videoFrame.classList.toggle("joining", state === "joining");
+  els.videoFrame.classList.toggle("live", state === "live");
+};
+
+// Cosmetic "driving" affordance on the joystick zone (accent glow + DRIVING
+// chip).  Toggled exactly where the command heartbeat starts/stops; it never
+// gates the joystick commands themselves.
+const setDriving = (on) => {
+  els.joyZone.classList.toggle("active", on);
 };
 
 let currentMower = null;
@@ -225,6 +244,10 @@ async function pollStatus(name) {
     setBattery(live ? s.battery : null, s.charging);
     setMowerState(live ? s.status : null, live ? s.error : null);
 
+    // Surface the manual-reconnect prompt on the button itself, not just the
+    // status chip (warn-tinted nudge when the auto-retry loop has given up).
+    els.reconnect.classList.toggle("attention", !live && !!s.auto_gave_up);
+
     // Reconcile the headlight toggle with the mower's actual state — the
     // firmware auto-offs the light, so trust the server's probe over our
     // optimistic guess.  null means "not probed yet"; keep the local guess.
@@ -273,6 +296,7 @@ function startJoystick(name) {
   if (ws) { ws.close(); ws = null; }
   if (joystick) { joystick.destroy(); joystick = null; }
   if (joyTimer) { clearInterval(joyTimer); joyTimer = null; }   // don't leak a re-send timer across mower switches
+  setDriving(false);
 
   const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${wsProto}//${location.host}/ws/joystick/${encodeURIComponent(name)}`);
@@ -291,7 +315,7 @@ function startJoystick(name) {
     zone: els.joyZone,
     mode: "dynamic",
     dynamicPage: true,
-    color: "#666",
+    color: "#2dd47a",
     size: 180,
   });
 
@@ -317,6 +341,7 @@ function startJoystick(name) {
     if (!joyTimer) {
       sendJoystick(joyState);                                           // first frame immediately
       joyTimer = setInterval(() => sendJoystick(joyState), REPEAT_MS);  // then heartbeat the held state
+      setDriving(true);
     }
   });
 
@@ -324,6 +349,7 @@ function startJoystick(name) {
     if (joyTimer) { clearInterval(joyTimer); joyTimer = null; }
     joyState = { x: 0, y: 0, force: 0 };
     sendJoystick(joyState);                                             // explicit stop on release
+    setDriving(false);
   });
 }
 
@@ -344,6 +370,7 @@ function joystickFailsafeStop() {
   joyTimer = null;
   joyState = { x: 0, y: 0, force: 0 };
   sendJoystick(joyState);
+  setDriving(false);
 }
 window.addEventListener("blur", joystickFailsafeStop);
 window.addEventListener("pagehide", joystickFailsafeStop);
@@ -376,7 +403,7 @@ els.stop.onclick   = () => action("stop");
 // it's off, "Light Off" when it's on.
 let lightOn = false;
 function setLightLabel() {
-  els.light.textContent = lightOn ? "Light Off" : "Light On";
+  els.lightLabel.textContent = lightOn ? "Light Off" : "Light On";
 }
 els.light.onclick = async () => {
   lightOn = !lightOn;          // optimistic flip for instant feedback
@@ -409,6 +436,7 @@ async function requestKeyframe() {
 async function startCamera() {
   if (!currentMower) return;
   els.camStart.disabled = true;
+  setCamUI("joining");
   log(`starting camera for ${nick(currentMower)}…`);
   try {
     const r = await fetch(`/api/camera/${encodeURIComponent(currentMower)}/start`, { method: "POST" });
@@ -416,6 +444,7 @@ async function startCamera() {
       const body = await r.text();
       log(`camera start failed: ${r.status} ${body}`);
       els.camStart.disabled = false;
+      setCamUI("off");
       return;
     }
     const tok = await r.json();
@@ -445,15 +474,18 @@ async function startCamera() {
     await agora.join(tok.appid, tok.channelName, tok.token, tok.uid);
     log("joined Agora channel");
     els.camStop.disabled = false;
+    setCamUI("live");
     startCompass(currentMower);   // begin polling heading for the overlay compass
   } catch (e) {
     log(`camera start threw: ${e}`);
     els.camStart.disabled = false;
+    setCamUI("off");
   }
 }
 
 async function stopCamera({ silent } = {}) {
   stopCompass();
+  setCamUI("off");
   if (agora) {
     try { await agora.leave(); } catch (_) {}
     agora = null;
@@ -476,6 +508,22 @@ async function stopCamera({ silent } = {}) {
 
 els.camStart.onclick = startCamera;
 els.camStop.onclick  = () => stopCamera({});
+
+// ── UI chrome (cosmetic only — no mower I/O) ────────────────────────────────
+// Log drawer: collapsed by default on phones, open by default on desktop where
+// vertical space is cheap.  The <pre> scrolls internally either way.
+els.logToggle.onclick = () => {
+  const open = els.logDrawer.classList.toggle("open");
+  els.logToggle.setAttribute("aria-expanded", String(open));
+  if (open) els.log.scrollTop = els.log.scrollHeight;   // jump to newest lines
+};
+if (window.matchMedia("(min-width: 900px)").matches) {
+  els.logDrawer.classList.add("open");
+  els.logToggle.setAttribute("aria-expanded", "true");
+}
+
+// Fault banner is clamped to two lines; tap toggles the full message.
+els.mowerError.onclick = () => els.mowerError.classList.toggle("expanded");
 
 // ── Boot ────────────────────────────────────────────────────────────────────
 loadMowers();

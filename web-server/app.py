@@ -487,18 +487,34 @@ def _login_html(error: bool = False) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Luba Remote — Sign in</title>
 <style>
+  :root {{ --bg:#0b0f14; --surface:#121924; --surface-2:#1a2432;
+           --border:rgba(255,255,255,.07); --text:#e8eef5; --text-dim:#8fa0b3;
+           --accent:#2dd47a; --accent-press:#24b968; --accent-ink:#04371c;
+           --danger:#ff5d5d; --radius:14px; --radius-sm:10px;
+           --shadow:0 8px 28px rgba(0,0,0,.45);
+           --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }}
   body {{ margin:0; min-height:100vh; display:flex; align-items:center;
-         justify-content:center; background:#111; color:#eee;
-         font-family:system-ui,-apple-system,sans-serif; }}
-  form {{ background:#1b1b1b; padding:28px 26px; border-radius:12px;
-          width:min(90vw,320px); box-shadow:0 6px 24px rgba(0,0,0,.5); }}
-  h1 {{ margin:0 0 18px; font-size:20px; font-weight:600; }}
-  label {{ display:block; font-size:13px; color:#aaa; margin:12px 0 4px; }}
-  input {{ width:100%; box-sizing:border-box; padding:10px; font-size:16px;
-           border:1px solid #333; border-radius:8px; background:#222; color:#eee; }}
-  button {{ width:100%; margin-top:20px; padding:11px; font-size:16px; border:0;
-            border-radius:8px; background:#2dd47a; color:#063; font-weight:600; }}
-  .err {{ color:#f77; font-size:13px; margin:0 0 8px; }}
+         justify-content:center; color:var(--text); font-family:var(--font);
+         background:radial-gradient(circle at 50% -20%, #131c29, var(--bg) 60%) var(--bg);
+         padding:16px; box-sizing:border-box; }}
+  form {{ background:var(--surface); padding:32px 28px;
+          border:1px solid var(--border); border-radius:var(--radius);
+          width:min(90vw,340px); box-shadow:var(--shadow); }}
+  h1 {{ margin:0 0 20px; font-size:20px; font-weight:700; letter-spacing:.2px; }}
+  label {{ display:block; font-size:12px; font-weight:600; letter-spacing:.3px;
+           color:var(--text-dim); margin:14px 0 6px; }}
+  input {{ width:100%; box-sizing:border-box; padding:12px; font-size:16px;
+           border:1px solid var(--border); border-radius:var(--radius-sm);
+           background:var(--surface-2); color:var(--text); outline:none;
+           transition:border-color .12s ease; }}
+  input:focus {{ border-color:rgba(45,212,122,.5); }}
+  button {{ width:100%; margin-top:22px; padding:13px; font-size:16px; border:0;
+            border-radius:var(--radius-sm); background:var(--accent);
+            color:var(--accent-ink); font-weight:700; cursor:pointer;
+            transition:background .12s ease; }}
+  button:hover {{ background:var(--accent-press); }}
+  button:active {{ background:var(--accent-press); }}
+  .err {{ color:var(--danger); font-size:13px; font-weight:600; margin:0 0 10px; }}
 </style>
 </head>
 <body>

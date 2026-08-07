@@ -1,78 +1,271 @@
-* { box-sizing: border-box; }
+:root {
+  --bg: #0b0f14; --surface: #121924; --surface-2: #1a2432;
+  --border: rgba(255,255,255,.07);
+  --text: #e8eef5; --text-dim: #8fa0b3;
+  --accent: #2dd47a; --accent-press: #24b968; --accent-ink: #04371c;
+  --danger: #ff5d5d; --warn: #ffb454; --info: #4aa8ff;
+  --radius: 14px; --radius-sm: 10px;
+  --shadow: 0 8px 28px rgba(0,0,0,.45);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+
+* { box-sizing: border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  overscroll-behavior: none;
+  max-width: 100%;
+  overflow-x: hidden;   /* the page never scrolls horizontally */
+}
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, sans-serif;
-  background: #111;
-  color: #eee;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
+  /* Clear the fixed STOP bar at the bottom. */
+  padding-bottom: calc(88px + env(safe-area-inset-bottom));
 }
 
-header {
+svg.ico { width: 18px; height: 18px; flex: none; display: block; }
+svg.ico-big { width: 44px; height: 44px; opacity: .5; }
+
+:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+
+/* Controls are not text — don't let a long-press start a selection. */
+button, select, a, .chip, #joystick-zone, header {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+
+#app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: calc(8px + env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 8px max(14px, env(safe-area-inset-left));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+#mower {
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: 340px;
+  min-height: 44px;
+  padding: 0 32px 0 12px;
+  font: 600 15px var(--font);
+  color: var(--text);
+  background: var(--surface-2)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%238fa0b3' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E")
+    no-repeat right 12px center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  appearance: none;
+  -webkit-appearance: none;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.btn-header {
+  min-height: 44px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+.btn-icon { padding: 0; width: 44px; justify-content: center; }
+a.btn-header { text-decoration: none; color: var(--text); }
+
+/* Warn-tinted nudge when auto-reconnect has given up and a manual press is needed. */
+#reconnect.attention {
+  color: var(--warn);
+  border-color: rgba(255,180,84,.55);
+  box-shadow: 0 0 10px rgba(255,180,84,.18);
+}
+
+/* ── Status chips ─────────────────────────────────────────────────────────── */
+
+.chips {
+  flex: 1 1 100%;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  background: #1c1c1c;
-  border-bottom: 1px solid #333;
+  gap: 6px;
+  min-width: 0;
 }
 
-header label { font-weight: 600; }
-header select { padding: 0.25rem 0.5rem; background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 4px; }
-#status { margin-left: auto; font-size: 0.85rem; color: #888; }
-#status.connected    { color: #2a7; }
-#status.connecting   { color: #c83; }
-#status.disconnected { color: #c33; }
-.camera-controls { align-items: center; }
-/* Right-aligned telemetry cluster: mower state · battery · fault. */
-#telemetry { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
-#mower-status { font-size: 0.9rem; color: #bcd; white-space: nowrap; }
-#mower-status:empty { display: none; }
-#battery { font-size: 0.95rem; color: #2a7; font-variant-numeric: tabular-nums; white-space: nowrap; }
-#battery.low      { color: #c33; }
-#battery.charging { color: #5af; }
-#battery:empty    { display: none; }
-/* Fault message — full-width line under the controls; wraps so the whole
-   message is readable on a phone instead of truncating to "mc…". */
-.mower-error {
-  color: #f66;
-  font-size: 0.85rem;
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
   font-weight: 600;
-  line-height: 1.35;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  padding: 0.4rem 0.6rem;
-  background: rgba(200, 40, 40, 0.12);
-  border-left: 3px solid #c33;
-  border-radius: 4px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
-.mower-error:empty { display: none; }
-header button { padding: 0.3rem 0.6rem; font-size: 0.85rem; }
+.chip:empty { display: none; }
+
+/* Connection chip: colored dot + text.  The text can be long, so the chip is
+   inline-block (not flex) — that lets text-overflow ellipsize the bare text
+   node sitting next to the ::before dot. */
+#status.chip-status {
+  display: inline-block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  line-height: 26px;          /* 28px chip minus the 1px borders */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#status::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+#status.connected     { color: var(--text); }
+#status.connected::before    { background: var(--accent); animation: pulse-green 2s ease-out infinite; }
+#status.connecting    { color: var(--warn); }
+#status.connecting::before   { background: var(--warn);   animation: pulse-amber 1.2s ease-out infinite; }
+#status.disconnected  { color: var(--danger); }
+#status.disconnected::before { background: var(--danger); }
+
+@keyframes pulse-green {
+  0%       { box-shadow: 0 0 0 0 rgba(45,212,122,.5); }
+  70%,100% { box-shadow: 0 0 0 6px rgba(45,212,122,0); }
+}
+@keyframes pulse-amber {
+  0%       { box-shadow: 0 0 0 0 rgba(255,180,84,.5); }
+  70%,100% { box-shadow: 0 0 0 6px rgba(255,180,84,0); }
+}
+
+.chip-state { color: var(--text); }
+
+#battery { color: var(--accent); font-variant-numeric: tabular-nums; }
+#battery.low      { color: var(--danger); border-color: rgba(255,93,93,.4); }
+#battery.charging { color: var(--info); }
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
 
 main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  padding: 1rem;
-  max-width: 900px;
+  gap: 14px;
+  padding: 12px max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
   width: 100%;
+  max-width: 840px;
   margin: 0 auto;
 }
 
-#video-section { display: flex; flex-direction: column; gap: 0.5rem; position: relative; }
+/* ── Fault banner ─────────────────────────────────────────────────────────── */
 
-#video {
+.fault-banner {
+  padding: 10px 12px;
+  background: rgba(255,180,84,.08);
+  border: 1px solid rgba(255,180,84,.3);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  /* Clamp long faults to two lines; tap (see app.js) or hover title for the rest. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.fault-banner.expanded { -webkit-line-clamp: unset; display: block; }
+.fault-banner:empty { display: none; }
+
+/* ── Camera card ──────────────────────────────────────────────────────────── */
+
+#video-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#video-frame {
+  position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: #000;
-  border-radius: 6px;
+  background: #05080c;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
 
-/* Heading-up compass overlaid on the top-right of the video feed. */
+#video { position: absolute; inset: 0; }
+
+#cam-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  pointer-events: none;
+}
+#video-frame.live #cam-placeholder,
+#video-frame.joining #cam-placeholder { display: none; }
+
+#cam-spinner {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+#video-frame.joining #cam-spinner { display: flex; }
+
+.spinner {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255,255,255,.15);
+  border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.camera-controls {
+  display: flex;
+  gap: 10px;
+}
+.camera-controls .btn { flex: 1 1 0; }
+
+/* ── Compass (overlaid top-right of the video) ───────────────────────────── */
+
 .compass {
   position: absolute;
   top: 10px;
@@ -80,13 +273,13 @@ main {
   width: 84px;
   height: 84px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  background: rgba(4,8,12,.55);
+  border: 1px solid rgba(255,255,255,.3);
+  box-shadow: 0 1px 6px rgba(0,0,0,.5);
   pointer-events: none;
   z-index: 5;
   color: #fff;
-  font: 600 12px/1 system-ui, -apple-system, sans-serif;
+  font: 600 12px/1 var(--font);
 }
 .compass[hidden] { display: none; }
 
@@ -98,7 +291,7 @@ main {
   will-change: transform;
 }
 .cardinal { position: absolute; opacity: 0.9; }
-.cardinal-n { top: 5px; left: 50%; transform: translateX(-50%); color: #ff5a5a; }
+.cardinal-n { top: 5px; left: 50%; transform: translateX(-50%); color: var(--danger); }
 .cardinal-s { bottom: 5px; left: 50%; transform: translateX(-50%); }
 .cardinal-e { right: 6px; top: 50%; transform: translateY(-50%); }
 .cardinal-w { left: 6px; top: 50%; transform: translateY(-50%); }
@@ -113,7 +306,7 @@ main {
   height: 0;
   border-left: 7px solid transparent;
   border-right: 7px solid transparent;
-  border-bottom: 14px solid #4fc3f7;
+  border-bottom: 14px solid var(--info);
 }
 
 /* Heading number in the middle. */
@@ -126,72 +319,282 @@ main {
   text-align: center;
   font-size: 15px;
   letter-spacing: 0.5px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  text-shadow: 0 1px 2px rgba(0,0,0,.85);
+  font-variant-numeric: tabular-nums;
 }
 
-.camera-controls {
-  display: flex;
-  gap: 0.5rem;
-}
+/* ── Joystick ─────────────────────────────────────────────────────────────── */
 
 #controls {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 1rem;
-  padding: 1rem 0;
+  gap: 14px;
 }
 
 /* Non-flex block wrapper so nipplejs doesn't take its parentIsFlex branch. */
-#joystick-wrap {
-  display: block;
-}
+#joystick-wrap { display: block; width: 100%; }
+
+#joystick-zone,
+#joystick-zone * { touch-action: none; }
 
 #joystick-zone {
   position: relative;
-  width: 220px;
-  height: 220px;
-  background: #1c1c1c;
-  border: 1px solid #333;
-  border-radius: 50%;
-  touch-action: none;
+  width: 100%;
+  max-width: 480px;
+  height: clamp(220px, 34vh, 340px);
+  margin: 0 auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(45,212,122,.07), transparent 62%),
+    var(--surface);
+  box-shadow: var(--shadow);
+  transition: border-color .12s ease, box-shadow .12s ease;
+  cursor: crosshair;
 }
+
+/* Concentric guide rings + a small centre dot, purely decorative. */
+.joy-rings {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: repeating-radial-gradient(
+    circle at 50% 50%,
+    transparent 0 33px,
+    rgba(255,255,255,.055) 33px 34px
+  );
+  pointer-events: none;
+}
+.joy-rings::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.3);
+}
+
+.joy-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  color: var(--text-dim);
+  opacity: .7;
+  pointer-events: none;
+}
+
+/* Commands are streaming: glow the zone, swap the hint for a "Driving" chip. */
+#joystick-zone.active {
+  border-color: rgba(45,212,122,.5);
+  box-shadow: 0 0 0 1px rgba(45,212,122,.25), 0 0 26px rgba(45,212,122,.14);
+}
+#joystick-zone.active .joy-hint { opacity: 0; }
+
+#drive-indicator {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(45,212,122,.12);
+  border: 1px solid rgba(45,212,122,.4);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+#drive-indicator::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse-green 1s ease-out infinite;
+}
+#joystick-zone.active #drive-indicator { display: inline-flex; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 14px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: 600 15px var(--font);
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, transform .12s ease, color .12s ease;
+}
+@media (hover: hover) {
+  .btn:hover:not(:disabled) { background: #223047; }
+}
+.btn:active:not(:disabled) { transform: translateY(1px); background: #223047; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+@media (hover: hover) {
+  .btn.primary:hover:not(:disabled) { background: var(--accent-press); }
+}
+.btn.primary:active:not(:disabled) { background: var(--accent-press); }
 
 .actions {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 0.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
   width: 100%;
-  max-width: 320px;
+  max-width: 480px;
+  margin: 0 auto;
+}
+.actions .span-2 { grid-column: 1 / -1; }
+
+/* ── Emergency STOP bar (fixed, can never scroll away) ────────────────────── */
+
+#stop-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  padding: 10px max(14px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  background: linear-gradient(to top, rgba(11,15,20,.97), rgba(11,15,20,.88));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border);
 }
 
-button {
-  background: #2a2a2a;
-  color: #eee;
-  border: 1px solid #444;
-  border-radius: 4px;
-  padding: 0.6rem 0.75rem;
-  font-size: 1rem;
+.btn-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 480px;
+  min-height: 58px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--danger);
+  color: #fff;
+  font: 800 19px var(--font);
+  letter-spacing: 3px;
   cursor: pointer;
+  box-shadow: 0 4px 18px rgba(255,93,93,.3);
+  transition: background .12s ease, transform .12s ease, box-shadow .12s ease;
+  user-select: none;
+  -webkit-user-select: none;
 }
-button:hover:not(:disabled) { background: #3a3a3a; }
-button:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-stop .ico { width: 22px; height: 22px; }
+@media (hover: hover) {
+  .btn-stop:hover { background: #e64c4c; }
+}
+.btn-stop:active {
+  transform: translateY(1px);
+  background: #d84343;
+  box-shadow: 0 2px 10px rgba(255,93,93,.25);
+}
 
-button.danger {
-  background: #6e1f1f;
-  border-color: #8a2828;
+/* ── Log drawer (collapsed by default; see app.js) ────────────────────────── */
+
+#log-drawer { margin-top: 2px; }
+
+#log-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font: 600 13px var(--font);
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease;
 }
-button.danger:hover { background: #8a2828; }
+@media (hover: hover) {
+  #log-toggle:hover { color: var(--text); }
+}
+#log-toggle .caret { margin-left: auto; transition: transform .12s ease; }
+#log-drawer.open #log-toggle .caret { transform: rotate(180deg); }
 
 #log {
-  margin: 0 1rem 1rem;
-  padding: 0.5rem;
-  background: #1c1c1c;
-  border: 1px solid #333;
-  border-radius: 4px;
-  font-size: 11px;
-  line-height: 1.3;
-  max-height: 140px;
-  overflow-y: auto;
+  display: none;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  max-height: 180px;
+  overflow-y: auto;      /* the drawer scrolls internally, never the page */
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#log-drawer.open #log { display: block; }
+
+/* ── Landscape phone: camera left, joystick right (drive-by-camera) ───────── */
+
+@media (orientation: landscape) and (max-height: 540px) {
+  body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+
+  #app-header { padding-top: calc(6px + env(safe-area-inset-top)); padding-bottom: 6px; }
+  .chips { flex: 0 1 auto; margin-left: auto; }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+    max-width: none;
+  }
+  .fault-banner, #log-drawer { grid-column: 1 / -1; }
+
+  #joystick-zone { height: clamp(180px, 52vh, 300px); max-width: none; }
+  .actions { max-width: none; }
+
+  /* Keep the STOP over the joystick column only, leaving the camera clear. */
+  #stop-bar {
+    left: auto;
+    right: 0;
+    width: min(46vw, 430px);
+    border-top-left-radius: var(--radius);
+    border-left: 1px solid var(--border);
+  }
+  .btn-stop { min-height: 52px; }
+}
+
+/* ── Desktop / tablet ─────────────────────────────────────────────────────── */
+
+@media (min-width: 760px) {
+  #app-header { padding-left: max(20px, env(safe-area-inset-left)); padding-right: max(20px, env(safe-area-inset-right)); }
+  .chips { flex: 1 0 auto; justify-content: flex-end; margin-left: auto; }
+  .chip-status { max-width: 420px; }
+  main { gap: 16px; padding-top: 16px; }
+  #joystick-zone { height: 320px; }
+  #log { max-height: 240px; }
 }

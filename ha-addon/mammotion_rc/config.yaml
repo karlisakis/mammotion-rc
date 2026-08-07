@@ -1,0 +1,34 @@
+# Mammotion RC — Home Assistant local add-on.
+#
+# Install: copy this folder to /addons/mammotion_rc on the HAOS box, then
+# Settings → Add-ons → Add-on Store → ⋮ → Check for updates → Local add-ons.
+# Full guide in DOCS.md (shown on the add-on's Documentation tab).
+name: Mammotion RC
+version: "1.0.0"
+slug: mammotion_rc
+description: Drive your Mammotion mower — joystick, live camera, status — via the HC33 BLE proxy
+url: https://github.com/karlisakis/mammotion-rc
+arch:
+  - aarch64
+  - amd64
+startup: services
+boot: auto
+# Host networking is required: onboarding discovers HC33 proxies with a UDP
+# broadcast (port 9878) whose unicast replies land on an ephemeral port —
+# that never survives Docker NAT.
+host_network: true
+# Supervisor restarts the add-on if the web server stops answering.
+# NOTE: if you change the `port` option below, update this line and `webui`
+# to match — they are static and can't read the option.
+watchdog: tcp://[HOST]:8443
+webui: https://[HOST]:8443
+options:
+  web_username: luba
+  web_password: ""
+  port: 8443
+  regenerate_cert: false
+schema:
+  web_username: str
+  web_password: password
+  port: port
+  regenerate_cert: bool
