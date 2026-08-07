@@ -7,9 +7,14 @@
 ARG BUILD_FROM
 FROM python:3.13-slim
 
-# Snapshot of the repo's main branch. Docker revalidates this URL on every
-# build, so hitting "Rebuild" on the add-on after pushing to GitHub picks up
-# new code — no version juggling needed for your own iterations.
+# Cache-bust token: GitHub's tarball responses carry no Last-Modified, so the
+# classic Docker builder may silently reuse a cached ADD layer and "rebuild"
+# with stale code. Changing this ARG's value invalidates the cache from here
+# down, forcing a fresh download. Bump it (any new value — we use the repo
+# short SHA) together with the config.yaml version on every deploy.
+ARG CODE_REV=2d9ef66
+
+# Snapshot of the repo's main branch (re-fetched whenever CODE_REV changes).
 ADD https://github.com/karlisakis/mammotion-rc/archive/refs/heads/main.tar.gz /tmp/src.tar.gz
 
 RUN mkdir -p /opt/mammotion-rc \
