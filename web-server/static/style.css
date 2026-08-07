@@ -1,3 +1,26 @@
+/* Luba Remote — stylesheet.
+ *
+ * Layout: mobile-first CSS grid over named areas
+ *   fault / camera / drive (joystick + actions) / mow / log
+ * in three arrangements:
+ *   - phone portrait (default): one column, STOP bar fixed at the bottom,
+ *     main reserves bottom padding so nothing hides under it;
+ *   - phone landscape (coarse pointer, short viewport): camera left (~55%),
+ *     joystick + actions right, mow/log full-width below, STOP pinned over
+ *     the joystick column so the camera stays clear;
+ *   - ≥900px (tablet/desktop): true two-column grid centred at 1140px —
+ *     camera + mowing panel left, joystick + actions + diagnostics right.
+ *
+ * SCROLL WARNING — do not add overflow or fixed heights to html/body/main.
+ * The previous sheet set `overflow-x: hidden` on BOTH html and body; a
+ * non-visible overflow-x forces overflow-y to compute to `auto`, which turned
+ * html and body into nested scroll containers — the exact configuration that
+ * freezes touch scrolling on iOS Safari.  Horizontal protection now lives in
+ * `overflow-x: clip` on body alone: `clip` clips paint without ever creating
+ * a scroll container, so page scrolling stays fully native (touch, wheel,
+ * trackpad).  The only touch-action:none on the page is the joystick zone.
+ */
+
 :root {
   --bg: #0b0f14; --surface: #121924; --surface-2: #1a2432;
   --border: rgba(255,255,255,.07);
@@ -7,29 +30,23 @@
   --radius: 14px; --radius-sm: 10px;
   --shadow: 0 8px 28px rgba(0,0,0,.45);
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Fixed STOP bar: 58px button + 2×10px padding.  main and the toast region
+     both reserve this (plus the safe-area inset) so content never hides. */
+  --stopbar-h: 78px;
 }
 
 /* ── Base ─────────────────────────────────────────────────────────────────── */
 
-* { box-sizing: border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-html, body {
-  overscroll-behavior: none;
-  max-width: 100%;
-  overflow-x: hidden;   /* the page never scrolls horizontally */
-}
+html { overscroll-behavior-y: none; }   /* no pull-to-refresh mid-drive */
 
 body {
   margin: 0;
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
-  min-height: 100vh;
-  min-height: 100dvh;
-  display: flex;
-  flex-direction: column;
-  /* Clear the fixed STOP bar at the bottom. */
-  padding-bottom: calc(88px + env(safe-area-inset-bottom));
+  overflow-x: clip;   /* paint clip only — NOT a scroll container (see header) */
 }
 
 svg.ico { width: 18px; height: 18px; flex: none; display: block; }
@@ -37,8 +54,11 @@ svg.ico-big { width: 44px; height: 44px; opacity: .5; }
 
 :focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
 
+/* Kill the double-tap-zoom delay on controls; panning is unaffected. */
+button, select, a, input, .chip { touch-action: manipulation; }
+
 /* Controls are not text — don't let a long-press start a selection. */
-button, select, a, .chip, #joystick-zone, header {
+button, select, a, .chip, #joystick-zone, header, .toast {
   user-select: none;
   -webkit-user-select: none;
 }
@@ -159,18 +179,33 @@ a.btn-header { text-decoration: none; color: var(--text); }
 #battery.low      { color: var(--danger); border-color: rgba(255,93,93,.4); }
 #battery.charging { color: var(--info); }
 
-/* ── Layout ───────────────────────────────────────────────────────────────── */
+/* ── Layout: named-area grid ──────────────────────────────────────────────── */
 
 main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "fault"
+    "camera"
+    "drive"
+    "mow"
+    "log";
   gap: 14px;
-  padding: 12px max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
   width: 100%;
-  max-width: 840px;
+  max-width: 640px;
   margin: 0 auto;
+  /* Reserve the fixed STOP bar's height (+ safe area) so nothing hides under it. */
+  padding: 12px max(14px, env(safe-area-inset-right))
+           calc(var(--stopbar-h) + env(safe-area-inset-bottom) + 16px)
+           max(14px, env(safe-area-inset-left));
 }
+main > * { min-width: 0; }   /* grid items must never force horizontal overflow */
+
+.fault-banner  { grid-area: fault; }
+#video-section { grid-area: camera; }
+#controls      { grid-area: drive; }
+#mow-panel     { grid-area: mow; }
+#log-drawer    { grid-area: log; }
 
 /* ── Fault banner ─────────────────────────────────────────────────────────── */
 
@@ -248,6 +283,9 @@ main {
 }
 #video-frame.joining #cam-spinner { display: flex; }
 
+/* Live camera gets a subtle accent edge so "running" is visible at a glance. */
+#video-frame.live { border-color: rgba(45,212,122,.35); }
+
 .spinner {
   width: 24px;
   height: 24px;
@@ -262,7 +300,7 @@ main {
   display: flex;
   gap: 10px;
 }
-.camera-controls .btn { flex: 1 1 0; }
+.camera-controls .btn { flex: 1 1 0; min-width: 0; }
 
 /* ── Compass (overlaid top-right of the video) ───────────────────────────── */
 
@@ -334,6 +372,8 @@ main {
 /* Non-flex block wrapper so nipplejs doesn't take its parentIsFlex branch. */
 #joystick-wrap { display: block; width: 100%; }
 
+/* The ONLY touch-action:none on the page: dragging the stick must never pan
+   the page.  Scrolling works everywhere else. */
 #joystick-zone,
 #joystick-zone * { touch-action: none; }
 
@@ -341,7 +381,7 @@ main {
   position: relative;
   width: 100%;
   max-width: 480px;
-  height: clamp(220px, 34vh, 340px);
+  height: clamp(240px, 36vh, 380px);
   margin: 0 auto;
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -434,6 +474,7 @@ main {
   justify-content: center;
   gap: 8px;
   min-height: 48px;
+  min-width: 0;
   padding: 0 14px;
   background: var(--surface-2);
   color: var(--text);
@@ -441,12 +482,23 @@ main {
   border-radius: var(--radius-sm);
   font: 600 15px var(--font);
   cursor: pointer;
-  transition: background .12s ease, border-color .12s ease, transform .12s ease, color .12s ease;
+  transition: background .12s ease, border-color .12s ease, transform .12s ease, color .12s ease, filter .12s ease;
+}
+/* Labels ellipsize instead of forcing the column (and the page) wider. */
+.btn > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 @media (hover: hover) {
   .btn:hover:not(:disabled) { background: #223047; }
 }
-.btn:active:not(:disabled) { transform: translateY(1px); background: #223047; }
+.btn:active:not(:disabled) {
+  transform: translateY(1px) scale(.985);
+  background: #223047;
+  filter: brightness(1.12);
+}
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 .btn.primary {
@@ -464,10 +516,75 @@ main {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   width: 100%;
-  max-width: 480px;
-  margin: 0 auto;
 }
 .actions .span-2 { grid-column: 1 / -1; }
+
+/* ── Async-action feedback (busy spinner, success/fail flash) ─────────────── */
+
+/* While a POST is in flight: inline spinner replaces the icon, clicks are
+   ignored.  The STOP button is deliberately NOT pointer-locked — the pending
+   set in app.js already de-dupes it, and an emergency control must never be
+   uninteractive. */
+.btn.busy, .seg-btn.busy { pointer-events: none; }
+.busy { opacity: .9; }
+.busy .ico { display: none; }
+.btn.busy::before, .btn-stop.busy::before, .seg-btn.busy::before {
+  content: "";
+  width: 15px;
+  height: 15px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(127,127,127,.35);
+  border-top-color: currentColor;
+  animation: spin .7s linear infinite;
+}
+
+/* Brief settle flash: green ring on success, red on failure (also toasted). */
+@keyframes flash-ok {
+  0%   { box-shadow: 0 0 0 3px rgba(45,212,122,.5); background-color: rgba(45,212,122,.22); border-color: rgba(45,212,122,.8); }
+  100% { box-shadow: 0 0 0 3px rgba(45,212,122,0); }
+}
+@keyframes flash-err {
+  0%, 55% { box-shadow: 0 0 0 3px rgba(255,93,93,.5); background-color: rgba(255,93,93,.2); border-color: rgba(255,93,93,.8); }
+  100%    { box-shadow: 0 0 0 3px rgba(255,93,93,0); }
+}
+.flash-ok  { animation: flash-ok .65s ease-out; }
+.flash-err { animation: flash-err .65s ease-out; }
+
+/* ── Toasts (self-made; bottom-centre, floated above the STOP bar) ────────── */
+
+#toast-region {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--stopbar-h) + env(safe-area-inset-bottom) + 12px);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(92vw, 420px);
+  pointer-events: none;
+}
+.toast {
+  max-width: 100%;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font: 600 13px var(--font);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .2s ease, transform .2s ease;
+}
+.toast.show { opacity: 1; transform: none; }
+.toast.ok  { border-color: rgba(45,212,122,.5); }
+.toast.err { border-color: rgba(255,93,93,.55); color: #ffc9c9; }
 
 /* ── Emergency STOP bar (fixed, can never scroll away) ────────────────────── */
 
@@ -511,19 +628,15 @@ main {
   .btn-stop:hover { background: #e64c4c; }
 }
 .btn-stop:active {
-  transform: translateY(1px);
+  transform: translateY(1px) scale(.99);
   background: #d84343;
   box-shadow: 0 2px 10px rgba(255,93,93,.25);
 }
-
-/* ── Log drawer (collapsed by default; see app.js) ────────────────────────── */
 
 /* ── Mowing panel (job control, blades, height/speed settings) ────────────── */
 
 #mow-panel {
   width: 100%;
-  max-width: 480px;
-  margin: 14px auto 0;
   padding: 14px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -537,7 +650,6 @@ main {
   text-transform: uppercase;
   color: var(--text-dim);
 }
-#mow-panel .actions { max-width: none; }
 
 /* Live blade telemetry chips row. */
 .mow-status {
@@ -580,20 +692,25 @@ main {
   border-radius: var(--radius-sm);
 }
 .seg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 40px;
+  min-width: 0;
   border: 0;
   border-radius: calc(var(--radius-sm) - 4px);
   background: transparent;
   color: var(--text-dim);
-  font-size: 14px;
-  font-weight: 600;
-  transition: background 120ms ease, color 120ms ease;
+  font: 600 14px var(--font);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 .seg-btn.active {
   background: var(--accent);
   color: var(--accent-ink);
 }
-.seg-btn:active { transform: scale(0.98); }
+.seg-btn:active { transform: scale(0.96); }
 
 /* Blades On arming state: second tap confirms.  Danger-tinted + pulse so the
    armed button cannot be mistaken for a normal one. */
@@ -667,7 +784,7 @@ input[type="range"]::-moz-range-thumb {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
 }
 
-#log-drawer { margin-top: 2px; }
+/* ── Log drawer (collapsed by default; see app.js) ────────────────────────── */
 
 #log-toggle {
   display: flex;
@@ -687,6 +804,7 @@ input[type="range"]::-moz-range-thumb {
 @media (hover: hover) {
   #log-toggle:hover { color: var(--text); }
 }
+#log-toggle:active { transform: translateY(1px); }
 #log-toggle .caret { margin-left: auto; transition: transform .12s ease; }
 #log-drawer.open #log-toggle .caret { transform: rotate(180deg); }
 
@@ -706,25 +824,76 @@ input[type="range"]::-moz-range-thumb {
 }
 #log-drawer.open #log { display: block; }
 
-/* ── Landscape phone: camera left, joystick right (drive-by-camera) ───────── */
+/* ── Very narrow phones (≤360px): keep two columns without overflow ───────── */
 
-@media (orientation: landscape) and (max-height: 540px) {
-  body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+@media (max-width: 360px) {
+  .btn { padding: 0 10px; font-size: 14px; gap: 6px; }
+}
 
+/* ── Portrait tablets / small laptops (640–899px): use the extra width ────── */
+
+@media (min-width: 640px) and (max-width: 899.98px) {
+  main { max-width: 760px; gap: 16px; }
+  /* Four-up action rows instead of a tall 2×N stack.  .span-2 keeps its
+     1 / -1 span, so the light toggle becomes a full-width row — fine. */
+  .actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* ── Tablet landscape / desktop (≥900px): true two-column grid ────────────── */
+
+@media (min-width: 900px) {
+  #app-header {
+    padding-left: max(20px, env(safe-area-inset-left));
+    padding-right: max(20px, env(safe-area-inset-right));
+  }
+  .chips { flex: 1 0 auto; justify-content: flex-end; margin-left: auto; }
+  #status.chip-status { max-width: 420px; }
+
+  main {
+    max-width: 1140px;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    grid-template-areas:
+      "fault  fault"
+      "camera drive"
+      "mow    drive"
+      "mow    log";
+    align-items: start;
+    gap: 18px 22px;
+    padding-top: 18px;
+  }
+
+  #joystick-zone { height: 340px; max-width: none; }
+  .btn-stop { max-width: 560px; }
+  #log { max-height: 260px; }
+}
+
+/* ── Phone landscape (coarse pointer, short viewport): drive-by-camera ────── */
+/* Placed last so it wins over the ≥900px block on wide landscape phones
+   (e.g. iPhone Pro Max at 932px).  iPads (landscape height ≥ 744px) keep the
+   desktop layout above. */
+
+@media (orientation: landscape) and (pointer: coarse) and (max-height: 620px) {
   #app-header { padding-top: calc(6px + env(safe-area-inset-top)); padding-bottom: 6px; }
   .chips { flex: 0 1 auto; margin-left: auto; }
 
   main {
-    display: grid;
-    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    max-width: none;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);   /* camera ~55% */
+    grid-template-areas:
+      "fault  fault"
+      "camera drive"
+      "mow    mow"
+      "log    log";
     align-items: start;
     gap: 12px;
-    max-width: none;
   }
-  .fault-banner, #log-drawer { grid-column: 1 / -1; }
 
   #joystick-zone { height: clamp(180px, 52vh, 300px); max-width: none; }
-  .actions { max-width: none; }
+
+  /* Drive column is narrow: back to 2-up.  The full-width mowing panel can
+     afford 4-up (the ID selector outranks the class rule above). */
+  .actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #mow-panel .actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
   /* Keep the STOP over the joystick column only, leaving the camera clear. */
   #stop-bar {
@@ -735,15 +904,4 @@ input[type="range"]::-moz-range-thumb {
     border-left: 1px solid var(--border);
   }
   .btn-stop { min-height: 52px; }
-}
-
-/* ── Desktop / tablet ─────────────────────────────────────────────────────── */
-
-@media (min-width: 760px) {
-  #app-header { padding-left: max(20px, env(safe-area-inset-left)); padding-right: max(20px, env(safe-area-inset-right)); }
-  .chips { flex: 1 0 auto; justify-content: flex-end; margin-left: auto; }
-  .chip-status { max-width: 420px; }
-  main { gap: 16px; padding-top: 16px; }
-  #joystick-zone { height: 320px; }
-  #log { max-height: 240px; }
 }

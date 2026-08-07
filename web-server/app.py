@@ -891,24 +891,38 @@ async def status(name: str):
     )
     err_code = _last_error(h) if sys_status == _MODE_PAUSE else 0
     mower_error = _lookup_error(err_code, await _error_table()) if err_code else None
-    # Blade/cutter telemetry.  blade_state decodes the mower's own
-    # sensor_status bits 9-11 — the device's ground truth for "the disc is
-    # rotating", independent of what we last commanded.  Mode + RPM arrive in
-    # cutter_work_mode_info in reply to the watchdog's ~6 s get_cutter_mode
-    # probe (0 = normal, 1 = slow, 2 = fast).
+    # Blade/cutter telemetry.  blades_on decodes sensor_status bits 9-11
+    # CONSERVATIVELY: the documented encoding is OFF=0/ON=1, but upstream's
+    # blade_state property maps ANY nonzero (1-7) to ON — and sibling sensors
+    # use the same 3-bit field as a health scheme (1=warning, 2-7=error), so a
+    # warning state would misread as "blades spinning".  We report ON only for
+    # the exact documented value 1; the raw bits are on /static/diag.html.
     blades_on = None
     cutter_mode = None
     cutter_rpm = None
     try:
-        blades_on = int(h.snapshot.raw.report_data.dev.blade_state) == 1
+        blade_bits = (int(h.snapshot.raw.report_data.dev.sensor_status) >> 9) & 0x7
+        blades_on = blade_bits == 1
     except (AttributeError, TypeError, ValueError):
         pass
+    # Mode + RPM: the get_cutter_mode reply is routed by pymammotion's state
+    # reducer into mower_state.cutter_mode/cutter_rpm — NOT into
+    # report_data.cutter_work_mode_info (that one only fills when cutter info
+    # rides inside a toapp_report_data).  Prefer the reducer path, fall back to
+    # the report path.  (0 = normal, 1 = slow, 2 = fast.)
     try:
-        cw = h.snapshot.raw.report_data.cutter_work_mode_info
-        cutter_mode = int(cw.current_cutter_mode)
-        cutter_rpm = int(cw.current_cutter_rpm)
+        ms = h.snapshot.raw.mower_state
+        cutter_mode = int(ms.cutter_mode)
+        cutter_rpm = int(ms.cutter_rpm)
     except (AttributeError, TypeError, ValueError):
         pass
+    if not cutter_rpm:
+        try:
+            cw = h.snapshot.raw.report_data.cutter_work_mode_info
+            cutter_mode = int(cw.current_cutter_mode) if cutter_mode is None else cutter_mode
+            cutter_rpm = int(cw.current_cutter_rpm)
+        except (AttributeError, TypeError, ValueError):
+            pass
     # Job/manual-drive telemetry from the work report: mow completion %, area
     # mowed (device units), and the manual-drive speed readback.
     mow_percent = None
@@ -919,6 +933,13 @@ async def status(name: str):
         mow_percent = int(w.mow_percent)
         area_mowed = int(w.area_mowed)
         man_run_speed = int(w.man_run_speed)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    # Raw sensor_status bit-field (source bits behind blades_on — see
+    # /static/diag.html for the decoded view).  None until the mower reports.
+    sensor_status = None
+    try:
+        sensor_status = int(h.snapshot.raw.report_data.dev.sensor_status)
     except (AttributeError, TypeError, ValueError):
         pass
     # While the auto-reconnect watchdog is mid-retry the underlying transport
@@ -948,6 +969,7 @@ async def status(name: str):
         "mow_percent":    mow_percent,   # job completion 0-100, or None
         "area_mowed":     area_mowed,    # area mowed (device units), or None
         "man_run_speed":  man_run_speed, # manual-drive speed readback, or None
+        "sensor_status":  sensor_status, # raw sensor bit-field int, or None
     }
 
 
@@ -958,6 +980,311 @@ async def heading(name: str):
     _cfg(name)
     h = state.handles[name]
     return {"orientation": _current_orientation(h)}
+
+
+# ── Diagnostics / capability probe (backing /static/diag.html) ──────────────
+# Read-only introspection: GET /api/diag/{name} dumps everything the last
+# decoded reports gave us (raw sensor_status bits included, so the library's
+# blade-state decode can be eyeballed against reality), and POST
+# /api/diag/{name}/probe sends a battery of STRICTLY read-only query commands,
+# diffing the snapshot around each one to map which queries this firmware
+# actually answers over the BLE proxy.
+import dataclasses as _dataclasses
+import enum as _enum
+
+
+def _diag_jsonable(v):
+    """Best-effort JSON-safe rendering of snapshot values (enums, dataclasses,
+    nested containers).  Falls back to repr() rather than raising."""
+    if isinstance(v, _enum.Enum):
+        return f"{v.name}({v.value})"
+    if _dataclasses.is_dataclass(v) and not isinstance(v, type):
+        try:
+            return {k: _diag_jsonable(x) for k, x in _dataclasses.asdict(v).items()}
+        except Exception:  # noqa: BLE001
+            return repr(v)
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_diag_jsonable(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _diag_jsonable(x) for k, x in v.items()}
+    return repr(v)
+
+
+def _diag_get(h, path: str):
+    """Dotted-attribute path off h.snapshot.raw, JSON-safe; None on any failure."""
+    try:
+        v = h.snapshot.raw
+        for part in path.split("."):
+            v = getattr(v, part)
+        return _diag_jsonable(v)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# DeviceData's documented sensor_status bit-field accessors (report_info.py).
+_DIAG_SENSOR_ACCESSORS = (
+    "bumper_state", "blade_state",
+    "ult_left", "ult_left_front", "ult_right_front", "ult_right",
+)
+
+
+@app.get("/api/diag/{name}")
+async def diag(name: str):
+    """Rich read-only snapshot dump for the diagnostics page.  Every section is
+    individually guarded so partial data still returns."""
+    _cfg(name)
+    h = _handle(name)
+    out: dict = {"name": name}
+
+    try:
+        ms = h.snapshot.raw.mower_state
+        out["identity"] = {
+            k: _diag_jsonable(getattr(ms, k, None))
+            for k in ("model", "product_key", "sub_model_id", "model_id", "swversion")
+        }
+    except Exception as exc:  # noqa: BLE001
+        out["identity"] = {"error": str(exc)}
+
+    try:
+        dev = h.snapshot.raw.report_data.dev
+        sensor = int(getattr(dev, "sensor_status", 0))
+        d: dict = {
+            "sys_status":        _diag_jsonable(getattr(dev, "sys_status", None)),
+            "battery_val":       _diag_jsonable(getattr(dev, "battery_val", None)),
+            "charge_state":      _diag_jsonable(getattr(dev, "charge_state", None)),
+            "self_check_status": _diag_jsonable(getattr(dev, "self_check_status", None)),
+            "sensor_status":     sensor,
+            "sensor_status_bin": format(sensor, "032b"),
+            # Raw 3-bit groups per the model docstrings.  Bits 9-11 are what the
+            # library collapses into a boolean blade_state (ANY nonzero → ON) —
+            # the raw 0-7 value is what lets that decode be checked.
+            "sensor_bits": {
+                "bumper_bits_0_2":            sensor & 0x7,
+                "blade_bits_9_11":            (sensor >> 9) & 0x7,
+                "ult_left_bits_12_14":        (sensor >> 12) & 0x7,
+                "ult_left_front_bits_15_17":  (sensor >> 15) & 0x7,
+                "ult_right_front_bits_18_20": (sensor >> 18) & 0x7,
+                "ult_right_bits_21_23":       (sensor >> 21) & 0x7,
+            },
+        }
+        decoded: dict = {}
+        for prop in _DIAG_SENSOR_ACCESSORS:
+            try:
+                decoded[prop] = _diag_jsonable(getattr(dev, prop))
+            except Exception as exc:  # noqa: BLE001
+                decoded[prop] = f"<error: {exc}>"
+        d["sensor_decoded_by_lib"] = decoded
+        if hasattr(dev, "collector_status"):
+            with contextlib.suppress(Exception):
+                d["collector_status"] = _diag_jsonable(dev.collector_status)
+        out["dev"] = d
+    except Exception as exc:  # noqa: BLE001
+        out["dev"] = {"error": str(exc)}
+
+    try:
+        w = h.snapshot.raw.report_data.work
+        out["work"] = {
+            k: _diag_jsonable(getattr(w, k, None))
+            for k in ("knife_height", "man_run_speed", "mow_percent", "area_mowed",
+                      "nav_run_mode", "test_mode_status")
+        }
+    except Exception as exc:  # noqa: BLE001
+        out["work"] = {"error": str(exc)}
+
+    try:
+        cw = h.snapshot.raw.report_data.cutter_work_mode_info
+        out["cutter"] = {
+            "current_cutter_mode": _diag_jsonable(getattr(cw, "current_cutter_mode", None)),
+            "current_cutter_rpm":  _diag_jsonable(getattr(cw, "current_cutter_rpm", None)),
+            # The state reducer routes a *driver* get_cutter_mode reply into
+            # mower_state.cutter_mode/rpm, NOT into report_data — surface both
+            # so a reply is visible whichever path this firmware uses.
+            "mower_state_cutter_mode": _diag_get(h, "mower_state.cutter_mode"),
+            "mower_state_cutter_rpm":  _diag_get(h, "mower_state.cutter_rpm"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        out["cutter"] = {"error": str(exc)}
+
+    try:
+        out["maintenance"] = _diag_jsonable(h.snapshot.raw.report_data.maintenance)
+    except Exception as exc:  # noqa: BLE001
+        out["maintenance"] = {"error": str(exc)}
+
+    try:
+        limits = _diag_jsonable(h.snapshot.raw.device_limits)
+        out["limits"] = limits if isinstance(limits, dict) else _device_limits(h)
+    except Exception as exc:  # noqa: BLE001
+        out["limits"] = {"error": str(exc)}
+
+    try:
+        last = h.last_report_at
+        out["last_report_age_s"] = (
+            None if last == 0.0 else round(max(0.0, time.monotonic() - last), 1)
+        )
+    except Exception:  # noqa: BLE001
+        out["last_report_age_s"] = None
+    return out
+
+
+# One probe run at a time, globally — overlapping runs would corrupt each
+# other's before/after diffs and double BLE traffic through the same proxy.
+_PROBE_LOCK = asyncio.Lock()
+_PROBE_WAIT_S = 3.0
+
+# (probe label, h.commands method (None = handle-level baseline), args,
+#  {watched label: dotted snapshot path}, read-only rationale).
+#
+# READ-ONLY AUDIT — every entry verified against pymammotion 0.8.9 source;
+# nothing here sets, moves, starts, or toggles state:
+#   request_report_snapshot  → todev_report_cfg RPT_START count=1 (telemetry request)
+#   get_speed                → MctlDriver(bidire_speed_read_set=DrvSrSpeed(rw=0))
+#   get_cutter_mode          → MctlDriver(current_cutter_mode=AppGetCutterWorkMode())
+#   get_maintenance          → request_iot_sys(RPT_START, [MAINTAIN, BASESTATION_INFO,
+#                              FW_INFO], count=3) — a report subscription request
+#   get_device_version_info  → MctlSys(todev_get_dev_fw_info=1)
+#   get_device_product_model → MctlSys(device_product_type_info=DeviceProductTypeInfoT(result=1))
+#   get_car_light(1126)      → SocMul(get_lamp=GetHeadlamp(get_ids=1126))
+#   get_error_code           → MctlSys(bidire_comm_cmd=SysCommCmd(id=5, context=2, rw=1))
+#                              — upstream's error-ring dump request (the watchdog
+#                              already polls it every ~60 s); requests history only
+#   read_animal_avoidance    → MctlNav(nav_sys_param_cmd=NavSysParamMsg(id=13, rw=0))
+_PROBES: "list[tuple[str, str | None, tuple, dict[str, str], str]]" = [
+    ("request_report_snapshot", None, (), {
+        "dev.sys_status":    "report_data.dev.sys_status",
+        "dev.battery_val":   "report_data.dev.battery_val",
+        "dev.sensor_status": "report_data.dev.sensor_status",
+    }, "baseline liveness: one-shot report-cfg request (RPT_START, count=1) — asks the mower to report telemetry, sets nothing"),
+    ("get_speed", "get_speed", (), {
+        "mower_state.travel_speed": "mower_state.travel_speed",
+        "work.man_run_speed":       "report_data.work.man_run_speed",
+    }, "DrvSrSpeed(rw=0): explicit read flag, carries no value to apply"),
+    ("get_cutter_mode", "get_cutter_mode", (), {
+        "report_data.cutter_work_mode_info": "report_data.cutter_work_mode_info",
+        "mower_state.cutter_mode":           "mower_state.cutter_mode",
+        "mower_state.cutter_rpm":            "mower_state.cutter_rpm",
+    }, "AppGetCutterWorkMode(): pure query for current cutter mode/RPM"),
+    ("get_maintenance", "get_maintenance", (), {
+        "report_data.maintenance": "report_data.maintenance",
+    }, "request_iot_sys(RPT_START, [MAINTAIN, BASESTATION_INFO, FW_INFO], count=3): telemetry request only"),
+    ("get_device_version_info", "get_device_version_info", (), {
+        "mower_state.swversion":            "mower_state.swversion",
+        "device_firmwares.device_version":  "device_firmwares.device_version",
+        "device_firmwares.main_controller": "device_firmwares.main_controller",
+    }, "MctlSys(todev_get_dev_fw_info=1): firmware-version query"),
+    ("get_device_product_model", "get_device_product_model", (), {
+        "mower_state.model_id":     "mower_state.model_id",
+        "mower_state.sub_model_id": "mower_state.sub_model_id",
+    }, "DeviceProductTypeInfoT(result=1): product-type query"),
+    ("get_car_light(1126)", "get_car_light", (1126,), {
+        "mower_state.lamp_info": "mower_state.lamp_info",
+    }, "GetHeadlamp(get_ids=1126): headlight readback (the watchdog already sends this every ~6 s)"),
+    ("get_error_code", "get_error_code", (), {
+        "errors.err_code_list":      "errors.err_code_list",
+        "errors.err_code_list_time": "errors.err_code_list_time",
+    }, "SysCommCmd(id=5, context=2, rw=1): upstream's fault-history dump request (same one the watchdog polls); requests data, sets nothing"),
+    ("read_animal_avoidance", "read_animal_avoidance", (), {
+        "mower_state.animal_protection": "mower_state.animal_protection",
+    }, "NavSysParamMsg(id=13, rw=0): explicit read of the animal-avoidance setting"),
+]
+
+
+def _diag_nonzero(v) -> bool:
+    """True if a watched value is 'populated' (any nonzero / nonempty leaf)."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return bool(v.strip())
+    if isinstance(v, dict):
+        return any(_diag_nonzero(x) for x in v.values())
+    if isinstance(v, (list, tuple)):
+        return any(_diag_nonzero(x) for x in v)
+    return v is not None
+
+
+@app.post("/api/diag/{name}/probe")
+async def diag_probe(name: str):
+    """Capability prober: sequentially send each read-only query in _PROBES,
+    waiting ~3 s per probe and diffing the watched snapshot fields around it.
+    Rejects a concurrent run with 409.  Total wall clock ≈ 28 s."""
+    _cfg(name)
+    h = _handle(name)
+    if _PROBE_LOCK.locked():
+        raise HTTPException(409, "a capability probe run is already in progress")
+    async with _PROBE_LOCK:
+        started = time.monotonic()
+        probes: dict[str, dict] = {}
+        for label, method, args, watch, why in _PROBES:
+            entry: dict = {"why": why}
+            try:
+                if method is None:
+                    if not hasattr(h, "request_report_snapshot"):
+                        entry.update(status="not-in-lib",
+                                     detail="DeviceHandle.request_report_snapshot missing from installed pymammotion")
+                        probes[label] = entry
+                        continue
+                elif not hasattr(h.commands, method):
+                    entry.update(status="not-in-lib",
+                                 detail=f"h.commands.{method} missing from installed pymammotion")
+                    probes[label] = entry
+                    continue
+                before = {k: _diag_get(h, p) for k, p in watch.items()}
+                la_before = h.last_report_at
+                if method is None:
+                    await h.request_report_snapshot()
+                else:
+                    await h.send_raw(getattr(h.commands, method)(*args))
+                await asyncio.sleep(_PROBE_WAIT_S)
+                after = {k: _diag_get(h, p) for k, p in watch.items()}
+                changed = [k for k in watch if after.get(k) != before.get(k)]
+                entry["before"] = before
+                entry["after"] = after
+                # Did ANY LubaMsg arrive during the wait?  Attribution is fuzzy
+                # (a periodic report also advances this), but False is a strong
+                # hint the BLE side never answered anything.
+                entry["link_alive_during_wait"] = h.last_report_at > la_before
+                if changed:
+                    entry["status"] = "replied"
+                    entry["detail"] = "watched field(s) changed: " + ", ".join(changed)
+                else:
+                    entry["status"] = "sent-no-change"
+                    populated = [k for k, v in after.items() if _diag_nonzero(v)]
+                    if label == "get_error_code" and not populated:
+                        entry["detail"] = (
+                            "sent, no data: the error ring is empty — a mower with no "
+                            "recorded faults legitimately answers all-zeros, which this "
+                            "diff cannot tell apart from no reply"
+                        )
+                    elif populated:
+                        entry["detail"] = (
+                            "no change, but " + ", ".join(populated) + " already held "
+                            "nonzero data before the probe — a fresh answer carrying "
+                            "identical values is invisible to this diff"
+                        )
+                    else:
+                        entry["detail"] = (
+                            "watched fields still empty/zero after the wait — either no "
+                            "reply, or the reply lands somewhere this probe does not watch"
+                        )
+            except Exception as exc:  # noqa: BLE001
+                entry["status"] = "error"
+                entry["detail"] = f"{type(exc).__name__}: {exc}"
+            probes[label] = entry
+        return {
+            "ok": True,
+            "mower": name,
+            "wait_s_per_probe": _PROBE_WAIT_S,
+            "duration_s": round(time.monotonic() - started, 1),
+            "note": (
+                "All probes are read-only queries. 'sent-no-change' is NOT proof a "
+                "command is unsupported — some replies don't touch the watched snapshot "
+                "fields, and an answer identical to the current value produces no diff."
+            ),
+            "probes": probes,
+        }
 
 
 @app.post("/api/reconnect/{name}")

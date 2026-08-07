@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Luba Diagnostics</title>
+<style>
+  :root {
+    --bg:#0b0f14; --surface:#121924; --surface-2:#1a2432;
+    --border:rgba(255,255,255,.07); --text:#e8eef5; --text-dim:#8fa0b3;
+    --accent:#2dd47a; --danger:#ff5d5d; --warn:#ffb454; --info:#4aa8ff;
+    --radius:14px; --radius-sm:10px;
+    --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:16px; color:var(--text); font-family:var(--font);
+    background:radial-gradient(circle at 50% -20%, #131c29, var(--bg) 60%) var(--bg);
+    min-height:100vh;
+  }
+  header {
+    display:flex; flex-wrap:wrap; align-items:center; gap:10px;
+    margin:0 0 12px;
+  }
+  h1 { margin:0 8px 0 0; font-size:20px; font-weight:700; letter-spacing:.2px; }
+  h2 { margin:0 0 10px; font-size:14px; font-weight:700; letter-spacing:.3px;
+       color:var(--text); }
+  h2 .raw { font-family:var(--mono); font-weight:600; font-size:12px;
+            color:var(--text-dim); margin-left:8px; }
+  select, button, .btnlike {
+    font-family:var(--font); font-size:14px; padding:9px 14px;
+    border:1px solid var(--border); border-radius:var(--radius-sm);
+    background:var(--surface-2); color:var(--text); cursor:pointer;
+    text-decoration:none; display:inline-block;
+  }
+  select:focus, button:focus-visible { outline:none; border-color:rgba(45,212,122,.5); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.active { border-color:rgba(255,180,84,.6); color:var(--warn); }
+  #probeBtn {
+    background:var(--accent); color:#04371c; font-weight:700; border:0;
+  }
+  .intro { color:var(--text-dim); font-size:13px; line-height:1.55;
+           max-width:860px; margin:0 0 16px; }
+  .intro strong { color:var(--text); }
+  .banner {
+    background:rgba(255,93,93,.12); border:1px solid rgba(255,93,93,.4);
+    color:var(--danger); padding:10px 14px; border-radius:var(--radius-sm);
+    font-size:13px; margin:0 0 14px;
+  }
+  .hidden { display:none; }
+  .card {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--radius); padding:16px; margin:0 0 14px;
+  }
+  .grid {
+    display:grid; gap:14px; margin:0 0 14px;
+    grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));
+  }
+  .grid .card { margin:0; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th { text-align:left; color:var(--text-dim); font-weight:600; font-size:11px;
+       letter-spacing:.4px; text-transform:uppercase; padding:6px 12px 6px 0;
+       border-bottom:1px solid var(--border); white-space:nowrap; }
+  td { padding:6px 12px 6px 0; border-bottom:1px solid var(--border);
+       vertical-align:top; }
+  tr:last-child td { border-bottom:0; }
+  table.kv td:first-child { color:var(--text-dim); white-space:nowrap;
+                            font-family:var(--mono); font-size:12px; }
+  table.kv td:last-child { font-family:var(--mono); font-size:12px;
+                           word-break:break-word; }
+  .mono { font-family:var(--mono); font-size:12px; }
+  .dim { color:var(--text-dim); }
+  .small { font-size:12px; }
+  .bin {
+    font-family:var(--mono); font-size:16px; letter-spacing:2px;
+    background:var(--surface-2); border:1px solid var(--border);
+    border-radius:var(--radius-sm); padding:10px 12px; margin:0 0 8px;
+    overflow-x:auto; white-space:nowrap;
+  }
+  .b-dim    { color:#4a5a6d; }
+  .b-info   { color:var(--info); }
+  .b-accent { color:var(--accent); font-weight:700; }
+  .b-warn   { color:var(--warn); font-weight:700; }
+  .badge {
+    display:inline-block; padding:3px 10px; border-radius:999px;
+    font-size:11px; font-weight:700; letter-spacing:.3px; white-space:nowrap;
+  }
+  .badge.ok   { background:rgba(45,212,122,.15); color:var(--accent);
+                border:1px solid rgba(45,212,122,.4); }
+  .badge.warn { background:rgba(255,180,84,.14); color:var(--warn);
+                border:1px solid rgba(255,180,84,.4); }
+  .badge.mute { background:rgba(143,160,179,.12); color:var(--text-dim);
+                border:1px solid rgba(143,160,179,.35); }
+  .badge.err  { background:rgba(255,93,93,.14); color:var(--danger);
+                border:1px solid rgba(255,93,93,.4); }
+  details { margin-top:6px; }
+  summary { cursor:pointer; color:var(--info); font-size:12px; }
+  pre {
+    background:var(--surface-2); border:1px solid var(--border);
+    border-radius:var(--radius-sm); padding:10px; font-size:11px;
+    overflow-x:auto; margin:6px 0 0; max-width:640px;
+  }
+  #probeState { margin-left:10px; font-size:13px; }
+  .probehead { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+               margin:0 0 10px; }
+  @media (max-width:520px) {
+    body { padding:10px; }
+    .grid { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Mower diagnostics</h1>
+  <select id="mower" aria-label="Mower"></select>
+  <button id="pause" type="button">Pause</button>
+  <a href="/" class="btnlike">&#8592; Back</a>
+</header>
+
+<p class="intro">
+  This page shows the raw state PyMammotion holds for the mower — refreshed
+  every 3&nbsp;s — and can probe which <strong>read-only query commands</strong>
+  the firmware actually answers over the BLE proxy. The probe never sends
+  anything that moves the mower, spins the blades, or changes a setting.
+  Note that <strong>sent-no-change is NOT proof a command is unsupported</strong>:
+  some replies land in fields this page does not watch, and an answer identical
+  to the current value produces no visible diff.
+</p>
+
+<div id="conn" class="banner hidden"></div>
+
+<section id="sensorCard" class="card">
+  <h2>sensor_status</h2>
+  <p class="dim">waiting for first report&hellip;</p>
+</section>
+
+<div id="cards" class="grid"></div>
+
+<section class="card">
+  <div class="probehead">
+    <h2 style="margin:0">Capability probe</h2>
+    <span style="flex:1"></span>
+    <button id="probeBtn" type="button">Run capability probe</button>
+    <span id="probeState" class="dim"></span>
+  </div>
+  <p class="dim small" style="margin:0 0 10px">
+    Sends 9 read-only queries in sequence (~30&nbsp;s total), snapshotting the
+    relevant fields before and after each. <span class="badge ok">replied</span>
+    = a watched field changed; <span class="badge warn">sent-no-change</span>
+    = sent but nothing we watch moved (not proof of unsupported);
+    <span class="badge mute">not-in-lib</span> = the installed PyMammotion has
+    no such command; <span class="badge err">error</span> = sending failed.
+  </p>
+  <div id="probeResult"></div>
+</section>
+
+<script>
+"use strict";
+var $ = function (s) { return document.querySelector(s); };
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+var mower = null;
+var paused = false;
+var inflight = false;
+var probing = false;
+
+function banner(msg) {
+  var el = $("#conn");
+  if (!msg) { el.classList.add("hidden"); return; }
+  el.textContent = msg;
+  el.classList.remove("hidden");
+}
+
+// ── Mower picker ─────────────────────────────────────────────────────────────
+async function loadMowers() {
+  try {
+    var r = await fetch("/api/mowers");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    var list = await r.json();
+    var sel = $("#mower");
+    sel.innerHTML = list.map(function (m) {
+      return '<option value="' + esc(m.name) + '">' + esc(m.nickname || m.name) + "</option>";
+    }).join("");
+    if (list.length) {
+      mower = list[0].name;
+      refresh();
+    } else {
+      banner("No mowers configured — run onboarding first.");
+    }
+  } catch (e) {
+    banner("Cannot load mower list: " + e.message);
+  }
+}
+$("#mower").addEventListener("change", function (e) {
+  mower = e.target.value;
+  $("#probeResult").innerHTML = "";
+  $("#probeState").textContent = "";
+  refresh();
+});
+$("#pause").addEventListener("click", function () {
+  paused = !paused;
+  $("#pause").textContent = paused ? "Resume" : "Pause";
+  $("#pause").classList.toggle("active", paused);
+});
+
+// ── Generic key→value card rendering ────────────────────────────────────────
+function flat(obj, prefix, out) {
+  Object.entries(obj || {}).forEach(function (kv) {
+    var key = prefix ? prefix + "." + kv[0] : kv[0];
+    var v = kv[1];
+    if (v !== null && typeof v === "object" && !Array.isArray(v)) flat(v, key, out);
+    else out.push([key, Array.isArray(v) ? JSON.stringify(v) : v]);
+  });
+  return out;
+}
+function kvTable(obj) {
+  var rows = flat(obj, "", []);
+  if (!rows.length) return '<p class="dim small">no data</p>';
+  return '<div class="scroll"><table class="kv">' + rows.map(function (r) {
+    var val = (r[1] === null || r[1] === undefined || r[1] === "")
+      ? '<span class="dim">&mdash;</span>' : esc(r[1]);
+    return "<tr><td>" + esc(r[0]) + "</td><td>" + val + "</td></tr>";
+  }).join("") + "</table></div>";
+}
+
+// ── sensor_status panel: raw + binary + bit-field table ─────────────────────
+function renderSensor(dev) {
+  var el = $("#sensorCard");
+  if (!dev || dev.error || dev.sensor_status === undefined || dev.sensor_status === null) {
+    el.innerHTML = "<h2>sensor_status</h2><p class='dim'>not reported yet" +
+      (dev && dev.error ? " (" + esc(dev.error) + ")" : "") + "</p>";
+    return;
+  }
+  var bin = String(dev.sensor_status_bin || "").padStart(32, "0");
+  // bin is MSB-first: string index i holds bit (31 - i).
+  var seg = function (a, b, cls) { return '<span class="' + cls + '">' + esc(bin.slice(a, b)) + "</span>"; };
+  var binHtml =
+    seg(0, 8, "b-dim") +      // bits 31-24 (undocumented)
+    seg(8, 20, "b-info") +    // bits 23-12 ultrasonics
+    seg(20, 23, "b-accent") + // bits 11-9  blade
+    seg(23, 29, "b-dim") +    // bits 8-3   (undocumented)
+    seg(29, 32, "b-warn");    // bits 2-0   bumper
+  var bits = dev.sensor_bits || {};
+  var lib = dev.sensor_decoded_by_lib || {};
+  var rows = [
+    ["Bumper", "0–2", bits.bumper_bits_0_2, lib.bumper_state],
+    ["Blade disc", "9–11", bits.blade_bits_9_11, lib.blade_state],
+    ["Ultrasonic left", "12–14", bits.ult_left_bits_12_14, lib.ult_left],
+    ["Ultrasonic left-front", "15–17", bits.ult_left_front_bits_15_17, lib.ult_left_front],
+    ["Ultrasonic right-front", "18–20", bits.ult_right_front_bits_18_20, lib.ult_right_front],
+    ["Ultrasonic right", "21–23", bits.ult_right_bits_21_23, lib.ult_right]
+  ];
+  el.innerHTML =
+    '<h2>sensor_status <span class="raw">raw ' + esc(dev.sensor_status) + "</span></h2>" +
+    '<div class="bin">' + binHtml + "</div>" +
+    '<p class="dim small" style="margin:0 0 10px">bit 31 &hellip; bit 0 &nbsp;&mdash;&nbsp; ' +
+    '<span class="b-warn">bumper 0&ndash;2</span> &middot; ' +
+    '<span class="b-accent">blade 9&ndash;11</span> &middot; ' +
+    '<span class="b-info">ultrasonics 12&ndash;23</span></p>' +
+    '<div class="scroll"><table class="bits">' +
+    "<tr><th>Field</th><th>Bits</th><th>Raw (0–7)</th><th>Library decode</th></tr>" +
+    rows.map(function (r) {
+      var raw = (r[2] === null || r[2] === undefined) ? "—" : r[2];
+      var dec = (r[3] === null || r[3] === undefined) ? "—" : r[3];
+      return "<tr><td>" + esc(r[0]) + "</td><td>" + esc(r[1]) +
+        '</td><td class="mono">' + esc(raw) + "</td><td>" + esc(dec) + "</td></tr>";
+    }).join("") +
+    "</table></div>" +
+    '<p class="dim small" style="margin:10px 0 0">The main UI&rsquo;s &ldquo;Blades&rdquo; chip ' +
+    "uses the library decode, which maps <em>any</em> nonzero value of bits 9&ndash;11 to ON. " +
+    "Compare the raw 0&ndash;7 value here against what the disc is really doing.</p>";
+}
+
+// ── Live snapshot refresh (every 3 s, pausable) ─────────────────────────────
+function stripSensor(dev) {
+  if (!dev || typeof dev !== "object") return dev;
+  var rest = {};
+  Object.keys(dev).forEach(function (k) {
+    if (k !== "sensor_status_bin" && k !== "sensor_bits" && k !== "sensor_decoded_by_lib") {
+      rest[k] = dev[k];
+    }
+  });
+  return rest;
+}
+async function refresh() {
+  if (!mower || paused || inflight) return;
+  inflight = true;
+  try {
+    var r = await fetch("/api/diag/" + encodeURIComponent(mower));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    var d = await r.json();
+    banner(null);
+    renderSensor(d.dev);
+    var age = (d.last_report_age_s === null || d.last_report_age_s === undefined)
+      ? "never heard from mower" : d.last_report_age_s + " s ago";
+    var cards = [
+      ["Identity", d.identity],
+      ["Device", stripSensor(d.dev)],
+      ["Work", d.work],
+      ["Cutter", d.cutter],
+      ["Maintenance", d.maintenance],
+      ["Limits", d.limits],
+      ["Last decoded report", { last_report: age }]
+    ];
+    $("#cards").innerHTML = cards.map(function (c) {
+      return '<section class="card"><h2>' + esc(c[0]) + "</h2>" + kvTable(c[1]) + "</section>";
+    }).join("");
+  } catch (e) {
+    banner("Cannot reach the server: " + e.message);
+  } finally {
+    inflight = false;
+  }
+}
+setInterval(refresh, 3000);
+
+// ── Capability probe ────────────────────────────────────────────────────────
+var BADGE = {
+  "replied": ["replied", "ok"],
+  "sent-no-change": ["sent-no-change", "warn"],
+  "not-in-lib": ["not-in-lib", "mute"],
+  "error": ["error", "err"]
+};
+function renderMatrix(probes) {
+  var rows = Object.entries(probes || {}).map(function (kv) {
+    var cmd = kv[0], p = kv[1];
+    var b = BADGE[p.status] || [p.status || "?", "mute"];
+    var extra = "";
+    if (p.before !== undefined || p.after !== undefined) {
+      extra = "<details><summary>before / after</summary><pre>" +
+        esc(JSON.stringify({
+          before: p.before,
+          after: p.after,
+          link_alive_during_wait: p.link_alive_during_wait
+        }, null, 1)) + "</pre></details>";
+    }
+    return '<tr><td class="mono">' + esc(cmd) + '</td>' +
+      '<td><span class="badge ' + b[1] + '">' + esc(b[0]) + "</span></td>" +
+      "<td>" + esc(p.detail || "") + extra + "</td></tr>";
+  }).join("");
+  $("#probeResult").innerHTML = rows
+    ? '<div class="scroll"><table class="matrix">' +
+      "<tr><th>Command</th><th>Status</th><th>Detail</th></tr>" + rows + "</table></div>"
+    : "";
+}
+async function runProbe() {
+  if (!mower || probing) return;
+  probing = true;
+  var btn = $("#probeBtn"), st = $("#probeState");
+  btn.disabled = true;
+  var t0 = Date.now();
+  st.textContent = "Probing… (takes ~30 s)";
+  var tick = setInterval(function () {
+    st.textContent = "Probing… " + Math.round((Date.now() - t0) / 1000) + " s (takes ~30 s)";
+  }, 500);
+  try {
+    var r = await fetch("/api/diag/" + encodeURIComponent(mower) + "/probe", { method: "POST" });
+    if (r.status === 409) {
+      st.textContent = "A probe run is already in progress — try again in a minute.";
+      return;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    var d = await r.json();
+    st.textContent = "Done in " + d.duration_s + " s.";
+    renderMatrix(d.probes);
+  } catch (e) {
+    st.textContent = "Probe failed: " + e.message;
+  } finally {
+    clearInterval(tick);
+    btn.disabled = false;
+    probing = false;
+  }
+}
+$("#probeBtn").addEventListener("click", runProbe);
+
+loadMowers();
+</script>
+</body>
+</html>

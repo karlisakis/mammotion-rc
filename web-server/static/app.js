@@ -46,6 +46,7 @@ const els = {
   log:       document.getElementById("log"),
   logDrawer: document.getElementById("log-drawer"),
   logToggle: document.getElementById("log-toggle"),
+  toastRegion: document.getElementById("toast-region"),
 };
 
 const log = (msg) => {
@@ -221,8 +222,12 @@ els.mower.onchange = (e) => selectMower(e.target.value);
 // ── Reconnect + status polling ──────────────────────────────────────────────
 async function reconnectMower(name, { silent } = {}) {
   if (!silent) log(`reconnecting ${nick(name)}…`);
+  // Abort guard: a dead server must not leave the Reconnect button spinning
+  // forever (BLE reconnects are slow, so this is generous).
+  const ctl = new AbortController();
+  const kill = setTimeout(() => ctl.abort(), 20000);
   try {
-    const r = await fetch(`/api/reconnect/${encodeURIComponent(name)}`, { method: "POST" });
+    const r = await fetch(`/api/reconnect/${encodeURIComponent(name)}`, { method: "POST", signal: ctl.signal });
     if (!r.ok) {
       const body = await r.text();
       log(`reconnect failed: ${r.status} ${body}`);
@@ -236,6 +241,8 @@ async function reconnectMower(name, { silent } = {}) {
     log(`reconnect threw: ${e}`);
     setStatus(`${name}: reconnect error`, "disconnected");
     return false;
+  } finally {
+    clearTimeout(kill);
   }
 }
 
@@ -338,8 +345,19 @@ function startStatusPolling(name) {
   statusTimer = setInterval(() => pollStatus(name), 3000);
 }
 
-els.reconnect.onclick = () => {
-  if (currentMower) reconnectMower(currentMower, {});
+els.reconnect.onclick = async () => {
+  if (!currentMower || pending.has("reconnect")) return;   // in-flight guard
+  pending.add("reconnect");
+  setBusy(els.reconnect, true);
+  let ok = false;
+  try {
+    ok = await reconnectMower(currentMower, {});
+  } finally {
+    pending.delete("reconnect");
+    setBusy(els.reconnect, false);
+    flashResult(els.reconnect, ok);
+    toast(ok ? "Reconnected ✓" : "Reconnect failed", ok);
+  }
 };
 
 // ── Joystick ───────────────────────────────────────────────────────────────
@@ -430,24 +448,106 @@ document.addEventListener("visibilitychange", () => {
 });
 
 // ── Actions ─────────────────────────────────────────────────────────────────
+// Raw POST for a named mower action.  Returns true iff the server said OK;
+// failures are logged to the diagnostics drawer.  The 10 s abort guard means a
+// hung request can never leave a button stuck in its busy state.
 async function action(name) {
-  if (!currentMower) return;
+  if (!currentMower) return false;
   log(`action: ${name}`);
+  const ctl = new AbortController();
+  const kill = setTimeout(() => ctl.abort(), 10000);
   try {
-    const r = await fetch(`/api/action/${encodeURIComponent(currentMower)}/${name}`, { method: "POST" });
-    if (!r.ok) log(`action ${name} failed: ${r.status} ${await r.text()}`);
+    const r = await fetch(`/api/action/${encodeURIComponent(currentMower)}/${name}`, { method: "POST", signal: ctl.signal });
+    if (!r.ok) {
+      log(`action ${name} failed: ${r.status} ${await r.text()}`);
+      return false;
+    }
+    return true;
   } catch (e) {
     log(`action ${name} threw: ${e}`);
+    return false;
+  } finally {
+    clearTimeout(kill);
   }
 }
 
-els.pause.onclick  = () => action("pause");
-els.resume.onclick = () => action("resume");
-els.dock.onclick   = () => action("dock");
-els.undock.onclick = () => action("undock");
+// ── Action feedback (busy spinner, de-dupe, settle flash, toasts) ───────────
+// One wrapper (runAction) gives every action button the same lifecycle:
+//   - the action name goes into `pending` so a double-tap can't double-fire
+//     the POST (the reported blades bug);
+//   - the button shows an inline spinner (.busy + aria-busy, clicks ignored
+//     via CSS pointer-events) while the request is out;
+//   - on settle it flashes green/red and a small toast appears above the
+//     STOP bar.  Failures are already logged by action().
+
+const pending = new Set();               // action names with a POST in flight
+const isPending = (...names) => names.some((n) => pending.has(n));
+
+function setBusy(btn, on) {
+  if (!btn) return;
+  btn.classList.toggle("busy", on);
+  if (on) btn.setAttribute("aria-busy", "true");
+  else btn.removeAttribute("aria-busy");
+}
+
+function flashResult(btn, ok) {
+  if (!btn) return;
+  btn.classList.remove("flash-ok", "flash-err");
+  void btn.offsetWidth;                  // restart the CSS animation
+  const cls = ok ? "flash-ok" : "flash-err";
+  btn.classList.add(cls);
+  setTimeout(() => btn.classList.remove(cls), 700);
+}
+
+// Minimal self-made toast: bottom-centre, above the STOP bar, auto-dismisses.
+function toast(msg, ok = true) {
+  const t = document.createElement("div");
+  t.className = `toast ${ok ? "ok" : "err"}`;
+  t.textContent = msg;
+  els.toastRegion.appendChild(t);
+  requestAnimationFrame(() => t.classList.add("show"));
+  setTimeout(() => {
+    t.classList.remove("show");
+    setTimeout(() => t.remove(), 300);   // after the fade-out transition
+  }, 2500);
+}
+
+const ACTION_LABELS = {
+  "pause": "Paused", "resume": "Resumed", "dock": "Docking", "undock": "Undocking",
+  "stop": "STOP sent", "start-job": "Mowing started", "cancel-job": "Job cancelled",
+  "blades-on": "Blades on", "blades-off": "Blades off",
+  "light-on": "Light on", "light-off": "Light off",
+};
+
+async function runAction(name, btn, { withToast = true } = {}) {
+  if (!currentMower || pending.has(name)) return false;   // in-flight de-dupe
+  pending.add(name);
+  setBusy(btn, true);
+  let ok = false;
+  try {
+    ok = await action(name);
+  } finally {
+    pending.delete(name);
+    setBusy(btn, false);
+    flashResult(btn, ok);
+    if (withToast) toast(ok ? `${ACTION_LABELS[name] || name} ✓` : `${name} failed`, ok);
+  }
+  return ok;
+}
+
+els.pause.onclick  = () => runAction("pause", els.pause);
+els.resume.onclick = () => runAction("resume", els.resume);
+els.dock.onclick   = () => runAction("dock", els.dock);
+els.undock.onclick = () => runAction("undock", els.undock);
 // STOP also cuts the blades: stop_and_not_save_task halts motion/task, but a
 // manually-enabled blade state is separate — an emergency stop should end both.
-els.stop.onclick   = () => { disarmBlades(); action("stop"); action("blades-off"); };
+// Both POSTs fire in parallel; repeat presses while one is in flight are
+// no-ops via `pending` (the STOP button itself is never pointer-locked).
+els.stop.onclick   = () => {
+  disarmBlades();
+  runAction("stop", els.stop);
+  runAction("blades-off", els.bladesOff, { withToast: false });
+};
 
 // Headlight toggle.  The press is optimistic (flip + send immediately) for a
 // snappy feel; pollStatus then reconciles `lightOn` against the mower's real
@@ -459,10 +559,11 @@ function setLightLabel() {
   els.lightLabel.textContent = lightOn ? "Light Off" : "Light On";
 }
 els.light.onclick = async () => {
+  if (isPending("light-on", "light-off")) return;   // don't stack a double-tap
   lightOn = !lightOn;          // optimistic flip for instant feedback
   setLightLabel();
   const target = currentMower;
-  await action(lightOn ? "light-on" : "light-off");
+  await runAction(lightOn ? "light-on" : "light-off", els.light);
   // The server fires a get_car_light read-back right after the set; poll a
   // couple of times soon so the toggle reconciles to the mower's real state
   // (confirming success, or reverting on failure) within ~1-2 s instead of
@@ -472,8 +573,8 @@ els.light.onclick = async () => {
 };
 
 // ── Mowing: job control, blades, settings ───────────────────────────────────
-els.startJob.onclick  = () => action("start-job");
-els.cancelJob.onclick = () => action("cancel-job");
+els.startJob.onclick  = () => runAction("start-job", els.startJob);
+els.cancelJob.onclick = () => runAction("cancel-job", els.cancelJob);
 
 // Blades On takes a second confirming tap within 3.5 s — blades while
 // manual-driving is the one genuinely dangerous button on this page.  The
@@ -486,6 +587,7 @@ function disarmBlades() {
   els.bladesOnLabel.textContent = "Blades On";
 }
 els.bladesOn.onclick = () => {
+  if (isPending("blades-on")) return;     // POST already in flight — no re-arm
   if (!bladesArmTimer) {
     els.bladesOn.classList.add("armed");
     els.bladesOnLabel.textContent = "Tap to confirm";
@@ -495,14 +597,18 @@ els.bladesOn.onclick = () => {
   disarmBlades();
   bladesActionWithConfirm("blades-on");
 };
-els.bladesOff.onclick = () => { disarmBlades(); bladesActionWithConfirm("blades-off"); };
+els.bladesOff.onclick = () => {
+  if (isPending("blades-off")) return;    // in-flight guard (double-fire bug)
+  disarmBlades();
+  bladesActionWithConfirm("blades-off");
+};
 
 // Send a blades action, then re-poll quickly so the Blades chip reconciles to
 // the mower's real sensor state (spin-up takes a moment; the mower may also
 // refuse) instead of waiting for the regular 3 s cadence.
 async function bladesActionWithConfirm(name) {
   const target = currentMower;
-  await action(name);
+  await runAction(name, name === "blades-on" ? els.bladesOn : els.bladesOff);
   for (const ms of [1200, 2500, 4500]) {
     setTimeout(() => { if (currentMower === target) pollStatus(target); }, ms);
   }
@@ -523,12 +629,18 @@ async function applySetting(setting, value, labelEl, unit) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ value }),
     });
-    if (!r.ok) { log(`set ${setting} failed: ${r.status} ${await r.text()}`); return; }
+    if (!r.ok) {
+      log(`set ${setting} failed: ${r.status} ${await r.text()}`);
+      toast(`Set ${setting.replace("_", " ")} failed`, false);
+      return;
+    }
     const { applied } = await r.json();
     labelEl.textContent = `${applied} ${unit}`;
     log(`set ${setting} = ${applied} ${unit}`);
+    toast(`${setting === "blade_height" ? "Height" : "Speed"} ${applied} ${unit} ✓`);
   } catch (e) {
     log(`set ${setting} threw: ${e}`);
+    toast(`Set ${setting.replace("_", " ")} failed`, false);
   }
 }
 
@@ -552,21 +664,32 @@ els.speedSlider.onchange = () => {
 // read-back (the server fires get_cutter_mode right after the set).
 els.cutterSeg.addEventListener("click", async (e) => {
   const btn = e.target.closest(".seg-btn");
-  if (!btn || !currentMower) return;
+  if (!btn || !currentMower || pending.has("cutter_mode")) return;   // de-dupe
   for (const b of els.cutterSeg.querySelectorAll(".seg-btn")) b.classList.toggle("active", b === btn);
   const target = currentMower;
+  const label = btn.textContent.trim();
+  pending.add("cutter_mode");
+  setBusy(btn, true);
   try {
     const r = await fetch(`/api/set/${encodeURIComponent(target)}/cutter_mode`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ value: Number(btn.dataset.mode) }),
     });
-    if (!r.ok) { log(`set cutter_mode failed: ${r.status} ${await r.text()}`); return; }
-    log(`set blade speed: ${btn.textContent.trim()}`);
+    if (!r.ok) {
+      log(`set cutter_mode failed: ${r.status} ${await r.text()}`);
+      toast("Blade speed failed", false);
+      return;
+    }
+    log(`set blade speed: ${label}`);
   } catch (err) {
     log(`set cutter_mode threw: ${err}`);
+    toast("Blade speed failed", false);
+  } finally {
+    pending.delete("cutter_mode");
+    setBusy(btn, false);
+    setTimeout(() => { if (currentMower === target) pollStatus(target); }, 1500);
   }
-  setTimeout(() => { if (currentMower === target) pollStatus(target); }, 1500);
 });
 
 // ── Camera ──────────────────────────────────────────────────────────────────
@@ -585,7 +708,18 @@ async function requestKeyframe() {
 }
 
 async function startCamera() {
-  if (!currentMower) return;
+  if (!currentMower || pending.has("cam-start")) return;   // in-flight guard
+  pending.add("cam-start");
+  setBusy(els.camStart, true);
+  try {
+    await startCameraInner();
+  } finally {
+    pending.delete("cam-start");
+    setBusy(els.camStart, false);
+  }
+}
+
+async function startCameraInner() {
   els.camStart.disabled = true;
   setCamUI("joining");
   log(`starting camera for ${nick(currentMower)}…`);
@@ -658,7 +792,17 @@ async function stopCamera({ silent } = {}) {
 }
 
 els.camStart.onclick = startCamera;
-els.camStop.onclick  = () => stopCamera({});
+els.camStop.onclick  = async () => {
+  if (pending.has("cam-stop")) return;    // in-flight guard
+  pending.add("cam-stop");
+  setBusy(els.camStop, true);
+  try {
+    await stopCamera({});
+  } finally {
+    pending.delete("cam-stop");
+    setBusy(els.camStop, false);
+  }
+};
 
 // ── UI chrome (cosmetic only — no mower I/O) ────────────────────────────────
 // Log drawer: collapsed by default on phones, open by default on desktop where
