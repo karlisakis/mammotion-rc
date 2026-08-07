@@ -178,6 +178,10 @@ async def _watchdog(name: str) -> None:
                 if h is not None:
                     with contextlib.suppress(Exception):
                         await h.send_raw(h.commands.get_car_light(1126))
+                        # Cutter mode + live RPM land in cutter_work_mode_info
+                        # only in reply to this probe — it's what lets the UI
+                        # prove the blades are actually spinning.
+                        await h.send_raw(h.commands.get_cutter_mode())
             # Refresh the fault log every ~60 s (HA polls get_errors at the same
             # cadence).  The device only populates errors.err_code_list in reply
             # to get_error_code, so without this the buffer stays empty and no
@@ -708,6 +712,14 @@ async def post_setting(name: str, setting: str, payload: dict = Body(...)):
         lo, hi = (limits["working_speed"]["min"], limits["working_speed"]["max"]) if limits else (0.2, 0.6)
         v = round(min(max(value, lo), hi), 2)
         await h.send_raw(h.commands.set_speed(float(v)))
+    elif setting == "cutter_mode":
+        # Blade RPM preset: 0 = normal, 1 = slow/eco, 2 = fast.
+        v = int(value)
+        if v not in (0, 1, 2):
+            raise HTTPException(400, "cutter_mode must be 0 (normal), 1 (slow) or 2 (fast)")
+        await h.send_raw(h.commands.set_cutter_mode(v))
+        with contextlib.suppress(Exception):
+            await h.send_raw(h.commands.get_cutter_mode())  # fast read-back
     else:
         raise HTTPException(400, f"unknown setting {setting!r}")
     _LOGGER.info("set %s=%s for %s (requested %s)", setting, v, name, value)
@@ -879,6 +891,36 @@ async def status(name: str):
     )
     err_code = _last_error(h) if sys_status == _MODE_PAUSE else 0
     mower_error = _lookup_error(err_code, await _error_table()) if err_code else None
+    # Blade/cutter telemetry.  blade_state decodes the mower's own
+    # sensor_status bits 9-11 — the device's ground truth for "the disc is
+    # rotating", independent of what we last commanded.  Mode + RPM arrive in
+    # cutter_work_mode_info in reply to the watchdog's ~6 s get_cutter_mode
+    # probe (0 = normal, 1 = slow, 2 = fast).
+    blades_on = None
+    cutter_mode = None
+    cutter_rpm = None
+    try:
+        blades_on = int(h.snapshot.raw.report_data.dev.blade_state) == 1
+    except (AttributeError, TypeError, ValueError):
+        pass
+    try:
+        cw = h.snapshot.raw.report_data.cutter_work_mode_info
+        cutter_mode = int(cw.current_cutter_mode)
+        cutter_rpm = int(cw.current_cutter_rpm)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    # Job/manual-drive telemetry from the work report: mow completion %, area
+    # mowed (device units), and the manual-drive speed readback.
+    mow_percent = None
+    area_mowed = None
+    man_run_speed = None
+    try:
+        w = h.snapshot.raw.report_data.work
+        mow_percent = int(w.mow_percent)
+        area_mowed = int(w.area_mowed)
+        man_run_speed = int(w.man_run_speed)
+    except (AttributeError, TypeError, ValueError):
+        pass
     # While the auto-reconnect watchdog is mid-retry the underlying transport
     # flickers DISCONNECTED↔CONNECTING; report a steady "connecting" to the UI
     # so the badge doesn't strobe red between attempts.
@@ -900,6 +942,12 @@ async def status(name: str):
         "orientation":    _current_orientation(h),  # heading in degrees, or None
         "blade_height":   _current_blade_height(h),  # mm from last work report, or None
         "limits":         _device_limits(h),         # per-model slider bounds, or None
+        "blades_on":      blades_on,     # mower-reported disc rotation, or None
+        "cutter_mode":    cutter_mode,   # 0 normal / 1 slow / 2 fast, or None
+        "cutter_rpm":     cutter_rpm,    # live blade RPM, or None
+        "mow_percent":    mow_percent,   # job completion 0-100, or None
+        "area_mowed":     area_mowed,    # area mowed (device units), or None
+        "man_run_speed":  man_run_speed, # manual-drive speed readback, or None
     }
 
 

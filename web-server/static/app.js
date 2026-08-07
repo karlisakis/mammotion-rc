@@ -39,6 +39,10 @@ const els = {
   heightVal:     document.getElementById("height-val"),
   speedSlider:   document.getElementById("speed-slider"),
   speedVal:      document.getElementById("speed-val"),
+  bladeChip:     document.getElementById("blade-chip"),
+  rpmChip:       document.getElementById("rpm-chip"),
+  progressChip:  document.getElementById("progress-chip"),
+  cutterSeg:     document.getElementById("cutter-mode-seg"),
   log:       document.getElementById("log"),
   logDrawer: document.getElementById("log-drawer"),
   logToggle: document.getElementById("log-toggle"),
@@ -280,6 +284,29 @@ async function pollStatus(name) {
       els.heightVal.textContent = `${s.blade_height} mm`;
     }
 
+    // Blade telemetry: the chip shows the mower's own "disc rotating" sensor
+    // bit — ground truth, so a commanded-but-refused blades-on shows OFF here.
+    if (typeof s.blades_on === "boolean") {
+      els.bladeChip.textContent = `Blades: ${s.blades_on ? "ON" : "OFF"}`;
+      els.bladeChip.classList.toggle("blades-live", s.blades_on);
+    } else {
+      els.bladeChip.textContent = "Blades: —";
+      els.bladeChip.classList.remove("blades-live");
+    }
+    const rpm = s.cutter_rpm;
+    els.rpmChip.hidden = !(typeof rpm === "number" && rpm > 0);
+    if (!els.rpmChip.hidden) els.rpmChip.textContent = `${rpm} rpm`;
+    // Mark the active blade-speed preset from the mower's read-back.
+    if (typeof s.cutter_mode === "number") {
+      for (const b of els.cutterSeg.querySelectorAll(".seg-btn")) {
+        b.classList.toggle("active", Number(b.dataset.mode) === s.cutter_mode);
+      }
+    }
+    // Job progress chip (only meaningful mid-job).
+    const pct = s.mow_percent;
+    els.progressChip.hidden = !(typeof pct === "number" && pct > 0 && pct <= 100);
+    if (!els.progressChip.hidden) els.progressChip.textContent = `Job ${pct}%`;
+
     // Layer 1: HC33 TCP/HaLow socket.  If this is bad, BLE is irrelevant.
     if (s.availability !== "connected") {
       if (s.auto_retrying) {
@@ -466,9 +493,20 @@ els.bladesOn.onclick = () => {
     return;
   }
   disarmBlades();
-  action("blades-on");
+  bladesActionWithConfirm("blades-on");
 };
-els.bladesOff.onclick = () => { disarmBlades(); action("blades-off"); };
+els.bladesOff.onclick = () => { disarmBlades(); bladesActionWithConfirm("blades-off"); };
+
+// Send a blades action, then re-poll quickly so the Blades chip reconciles to
+// the mower's real sensor state (spin-up takes a moment; the mower may also
+// refuse) instead of waiting for the regular 3 s cadence.
+async function bladesActionWithConfirm(name) {
+  const target = currentMower;
+  await action(name);
+  for (const ms of [1200, 2500, 4500]) {
+    setTimeout(() => { if (currentMower === target) pollStatus(target); }, ms);
+  }
+}
 
 // Settings sliders.  'input' previews the value; 'change' (release) applies it
 // via POST /api/set, which clamps to the mower's model limits and echoes back
@@ -508,6 +546,28 @@ els.speedSlider.oninput = () => {
 els.speedSlider.onchange = () => {
   applySetting("speed", Number(els.speedSlider.value), els.speedVal, "m/s");
 };
+
+// Blade-speed preset (Eco/Normal/Fast → cutter_mode 1/0/2).  Optimistically
+// highlight the tapped preset; pollStatus reconciles with the mower's
+// read-back (the server fires get_cutter_mode right after the set).
+els.cutterSeg.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (!btn || !currentMower) return;
+  for (const b of els.cutterSeg.querySelectorAll(".seg-btn")) b.classList.toggle("active", b === btn);
+  const target = currentMower;
+  try {
+    const r = await fetch(`/api/set/${encodeURIComponent(target)}/cutter_mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: Number(btn.dataset.mode) }),
+    });
+    if (!r.ok) { log(`set cutter_mode failed: ${r.status} ${await r.text()}`); return; }
+    log(`set blade speed: ${btn.textContent.trim()}`);
+  } catch (err) {
+    log(`set cutter_mode threw: ${err}`);
+  }
+  setTimeout(() => { if (currentMower === target) pollStatus(target); }, 1500);
+});
 
 // ── Camera ──────────────────────────────────────────────────────────────────
 // Throttled so a storm of decode-failure events can't flood the BLE link.

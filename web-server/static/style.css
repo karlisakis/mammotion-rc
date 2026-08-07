@@ -539,6 +539,62 @@ main {
 }
 #mow-panel .actions { max-width: none; }
 
+/* Live blade telemetry chips row. */
+.mow-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.mow-status .chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+#blade-chip.blades-live {
+  background: rgba(45, 212, 122, 0.14);
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: blades-pulse-soft 1.2s ease-in-out infinite;
+}
+@keyframes blades-pulse-soft {
+  50% { box-shadow: 0 0 0 4px rgba(45, 212, 122, 0.15); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #blade-chip.blades-live { animation: none; }
+}
+
+/* Segmented control (blade-speed preset). */
+.segment {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.seg-btn {
+  min-height: 40px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 4px);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 600;
+  transition: background 120ms ease, color 120ms ease;
+}
+.seg-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.seg-btn:active { transform: scale(0.98); }
+
 /* Blades On arming state: second tap confirms.  Danger-tinted + pulse so the
    armed button cannot be mistaken for a normal one. */
 .btn-blades.armed {

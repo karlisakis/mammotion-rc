@@ -144,6 +144,15 @@
     <section id="mow-panel">
       <h2 class="panel-title">Mowing</h2>
 
+      <!-- Live blade telemetry: blade-chip is the mower's OWN sensor bit for
+           "disc rotating" (ground truth, not our last command); rpm-chip shows
+           the live cutter RPM from the ~6 s cutter-mode probe. -->
+      <div class="mow-status">
+        <span class="chip" id="blade-chip">Blades: —</span>
+        <span class="chip" id="rpm-chip" hidden></span>
+        <span class="chip" id="progress-chip" hidden></span>
+      </div>
+
       <div class="actions">
         <button id="start-job" class="btn primary">
           <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
@@ -174,6 +183,17 @@
           </svg>
           <span>Blades Off</span>
         </button>
+      </div>
+
+      <div class="setting">
+        <div class="setting-head">
+          <span>Blade speed</span>
+        </div>
+        <div class="segment" id="cutter-mode-seg" role="group" aria-label="Blade speed preset">
+          <button class="seg-btn" data-mode="1">Eco</button>
+          <button class="seg-btn" data-mode="0">Normal</button>
+          <button class="seg-btn" data-mode="2">Fast</button>
+        </div>
       </div>
 
       <div class="setting">
