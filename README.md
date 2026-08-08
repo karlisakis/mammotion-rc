@@ -251,8 +251,9 @@ not pure GPL** — they contain proprietary components that may be redistributed
 only for use with Morse Micro HaLow hardware (e.g. the HC33), complete and
 unmodified, with the BDL text retained.
 
-Runtime browser components (Agora RTC SDK, nipplejs) are loaded from their CDNs
-and are not bundled or relicensed by this project.
+The Agora RTC SDK is loaded from Agora's CDN and is not bundled or relicensed by
+this project. nipplejs (MIT, GPL-compatible) is bundled under
+`web-server/static/vendor/` so the joystick works without an internet route.
 
 See **[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)** for the full breakdown.
 

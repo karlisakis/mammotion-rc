@@ -92,7 +92,7 @@ repository and therefore not relicensed by it:
 | Component | License / Terms | Notes |
 |---|---|---|
 | [Agora RTC SDK (Web)](https://www.agora.io/) | Proprietary — Agora Terms of Service | Loaded from `download.agora.io`; carries the mower camera stream |
-| [nipplejs](https://github.com/yoannmoinet/nipplejs) | MIT | Loaded from jsDelivr; on-screen joystick |
+| [nipplejs](https://github.com/yoannmoinet/nipplejs) | MIT | **Bundled** at `web-server/static/vendor/nipplejs-0.10.1.min.js`; on-screen joystick. Vendored rather than loaded from a CDN so the joystick still works on a phone that is on the LAN but has no route to the internet. MIT is GPL-compatible; the copyright notice is retained in the file. |
 
 ---
 

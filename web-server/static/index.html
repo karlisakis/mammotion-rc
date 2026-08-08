@@ -26,7 +26,15 @@
 
   <!-- The only two external assets on the page (see docs/design-system.md). -->
   <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.23.0.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/nipplejs@0.10.1/dist/nipplejs.min.js"></script>
+  <!-- nipplejs is served locally, NOT from a CDN: the joystick is the primary
+       control, and a phone on the LAN with no route to the internet would
+       otherwise load this page fine and then have no stick at all — which is
+       exactly the kind of intermittent, environment-dependent failure that is
+       impossible to diagnose from the UI.  MIT, attribution in the file and in
+       THIRD-PARTY-NOTICES.md.  Agora stays on its CDN: it is camera-only (the
+       app degrades cleanly without it) and bundling it has licence
+       implications this project deliberately avoids. -->
+  <script src="/static/vendor/nipplejs-0.10.1.min.js"></script>
 </head>
 
 <!-- data-tab drives which phone panel is visible; ≥900px ignores it entirely
@@ -162,7 +170,10 @@
       <div id="joystick-wrap">
         <div id="joystick-zone">
           <div class="joy-rings" aria-hidden="true"></div>
-          <span class="joy-hint" aria-hidden="true">Hold &amp; drag to drive</span>
+          <!-- app.js rewrites this text to mirror the joystick socket's real
+               state, so a dead link is never invisible.  Same element, same
+               class — no new styling. -->
+          <span id="joy-hint" class="joy-hint" aria-hidden="true">Hold &amp; drag to drive</span>
           <span id="drive-indicator" class="chip chip-accent" aria-hidden="true">
             <span class="dot dot-pulse"></span>Driving
           </span>
@@ -330,6 +341,10 @@
       <dl class="sys-list">
         <div class="sys-row"><dt>Mower</dt><dd id="sys-mower" class="sys-val">—</dd></div>
         <div class="sys-row"><dt>HC33 link</dt><dd id="sys-link" class="sys-val">—</dd></div>
+        <!-- The browser→server joystick WebSocket, which is a separate failure
+             domain from the HC33 link: phones close it on lock/background/Wi-Fi
+             roam and the stick then silently commands nothing. -->
+        <div class="sys-row"><dt>Joystick link</dt><dd id="sys-joystick" class="sys-val">—</dd></div>
         <div class="sys-row"><dt>Last message</dt><dd id="sys-heartbeat" class="sys-val u-mono">—</dd></div>
         <div class="sys-row"><dt>Battery</dt><dd id="sys-battery" class="sys-val u-mono">—</dd></div>
         <div class="sys-row"><dt>State</dt><dd id="sys-state" class="sys-val">—</dd></div>
