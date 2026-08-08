@@ -12,7 +12,7 @@ FROM python:3.13-slim
 # with stale code. Changing this ARG's value invalidates the cache from here
 # down, forcing a fresh download. Bump it (any new value — we use the repo
 # short SHA) together with the config.yaml version on every deploy.
-ARG CODE_REV=55f5707
+ARG CODE_REV=d890f28
 
 # Snapshot of the repo's main branch (re-fetched whenever CODE_REV changes).
 ADD https://github.com/karlisakis/mammotion-rc/archive/refs/heads/main.tar.gz /tmp/src.tar.gz
