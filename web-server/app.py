@@ -120,7 +120,7 @@ AUTO_RECONNECT_DELAYS = [1, 2, 5, 10, 30]
 # Default is "both": the driver command is the documented one, and mowctrl is
 # upstream's Luba-2+ path; sending both costs one extra BLE frame and covers
 # either firmware.  See docs/blade-height-findings.md.
-_BLADE_HEIGHT_METHOD = os.environ.get("LUBA_BLADE_HEIGHT_METHOD", "both")
+_BLADE_HEIGHT_METHOD = os.environ.get("LUBA_BLADE_HEIGHT_METHOD", "both")  # hardware-verified: "driver" alone does nothing on HM442
 
 
 async def _auto_reconnect(name: str) -> None:

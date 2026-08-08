@@ -1,5 +1,43 @@
 # Cutting height on Luba-VA (HM442) over the BLE proxy — findings
 
+## RESOLVED
+
+**`todev_knife_height_set` is accepted and silently ignored by this firmware.
+Cutting height must be sent as `DrvMowCtrlByHand.cut_knife_height` instead.**
+
+Verified on hardware (`Luba-VAML9KK3`, fw `2.3.27.23`, undocked on grass,
+`sys_status=11`, reports live at <1 s):
+
+| Wire path | Sent | Result |
+|---|---|---|
+| `MctlDriver.todev_knife_height_set` | 40 | `knife_height` stayed **50** for 24 s — no motion, no event, no error |
+| `DrvMowCtrlByHand(main_ctrl=0, cut_knife_ctrl=0, cut_knife_height=40)` | 40 | **50 → 49 → 41 → 40** — motor travelled, settled in ~12 s |
+| Same, via the UI's default path | 60 | **39 → 48 → 60**, `is_start` true during travel |
+
+Blades stayed off throughout every run (`blade_bits=0`, `cutter_rpm=0`) — the
+`main_ctrl=0, cut_knife_ctrl=0` form is upstream's *stop-blades* command, which
+happens to carry the height field.
+
+Height is therefore **not** job-only, and there is no dock interlock: the live
+set works fine, just through the other message. The documented driver-layer
+command appears to be Luba-1 legacy on this platform — consistent with
+upstream's HA integration, which routes everything Luba-2-and-newer through
+`operate_on_device`.
+
+**Caveat:** `DrvMowCtrlByHand` is the *manual-mowing* control message. Sending
+`main_ctrl=0` while a job is running has not been tested and could plausibly
+interrupt manual-mow state; prefer changing height when the mower is idle.
+
+Also settled by the same run: real limits for this model are still unknown
+(HM442 has no `device_config` entry — the served limits are the Yuka fallback,
+`blade_height 0/0`), but the hardware accepted 40, 50 and 60, and reported
+intermediate values (49, 48, 41, 39) during travel, so the **motor is
+continuously positioned, not detented** — the 5 mm UI step is safe and
+hypothesis "35 is an illegal detent" is dead.
+
+---
+
+
 Investigation notes from debugging "the cutting-height slider does nothing"
 against a real mower (`Luba-VAML9KK3`) driven through the HC33 proxy with
 PyMammotion 0.8.9. Blade **speed** (`set_cutter_mode`) works on the same link,
@@ -66,17 +104,19 @@ sees nothing. `SysMowInfo.knife_height` is likewise parsed then ignored
 Both defects made every manual test ambiguous, which is why they were fixed
 before any protocol hypothesis was tested.
 
-## Open hypotheses, in priority order
+## Hypotheses as they stood before the hardware test (all now settled)
 
-1. **Firmware precondition — the lift motor won't run while docked/charging.**
+1. ~~**Firmware precondition — the lift motor won't run while docked/charging.**~~
+   **DEAD** — the successful runs above were on an undocked, idle mower, and
+   the *failing* driver-path run was under identical conditions.
    This is the one difference in kind between cutter mode (a stored parameter;
    nothing moves) and height (an actuator). An interlock while seated on
    charging contacts would produce exactly "accepted, no error, nothing
    happens". No source evidence either way — the library gates nothing. Test
    undocked, on grass.
-2. **Illegal detent.** 35 may not be a reachable position. Test 30 / 40 / 60 /
-   70 and see which take.
-3. **Luba-2 uses a different path.** Upstream's HA integration branches: Luba 1
+2. ~~**Illegal detent.**~~ **DEAD** — the motor reports intermediate values
+   (49, 48, 41, 39) while travelling, so positioning is continuous.
+3. **Luba-2 uses a different path.** ✅ **CONFIRMED — this was the cause.** Upstream's HA integration branches: Luba 1
    uses the sys-layer `set_blade_control`, while **Luba 2 and newer use
    `operate_on_device` → `DrvMowCtrlByHand`**, which carries `cut_knife_height`.
    Our blade on/off currently uses the Luba-1 path. Counter-evidence: the
@@ -84,7 +124,7 @@ before any protocol hypothesis was tested.
    motion-progress), which only makes sense if standalone height changes are
    supported. Worth probing with `main_ctrl=0, cut_knife_ctrl=0` (the
    no-blade-spin form) — but verify on hardware that it does not spin blades.
-4. **Job parameter only.** Height is a first-class field in `NavReqCoverPath`,
+4. ~~**Job parameter only.**~~ **DEAD** — the standalone live set works. Height is a first-class field in `NavReqCoverPath`,
    `NavPlanJobSet`, `NavStartJob` and `SysJobPlan`. `modify_route_information`
    (`sub_cmd=3`) is the least destructive way to write it as a job param.
 
