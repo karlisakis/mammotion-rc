@@ -105,6 +105,47 @@
   #probeState { margin-left:10px; font-size:13px; }
   .probehead { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
                margin:0 0 10px; }
+
+  /* ── Message trace ──────────────────────────────────────────────────── */
+  input[type=number] {
+    font-family:var(--mono); font-size:14px; padding:9px 10px; width:86px;
+    border:1px solid var(--border); border-radius:var(--radius-sm);
+    background:var(--surface-2); color:var(--text);
+  }
+  input[type=number]:focus { outline:none; border-color:rgba(74,168,255,.5); }
+  .ctl { display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+         margin:0 0 12px; }
+  .ctl label { display:inline-flex; align-items:center; gap:6px;
+               font-size:12px; color:var(--text-dim); letter-spacing:.2px; }
+  #traceBtn { background:var(--info); color:#042440; font-weight:700; border:0; }
+  #traceState { font-size:13px; }
+  .verdict {
+    padding:11px 14px; border-radius:var(--radius-sm); font-size:13.5px;
+    font-weight:700; line-height:1.45; margin:0 0 12px;
+  }
+  .verdict.yes { background:rgba(45,212,122,.14); color:var(--accent);
+                 border:1px solid rgba(45,212,122,.45); }
+  .verdict.no  { background:rgba(255,93,93,.12); color:var(--danger);
+                 border:1px solid rgba(255,93,93,.45); }
+  .verdict .sub { display:block; font-weight:500; font-size:12px;
+                  color:var(--text-dim); margin-top:4px; }
+  .sub-h { font-size:11px; font-weight:700; letter-spacing:.4px;
+           text-transform:uppercase; color:var(--text-dim); margin:14px 0 6px; }
+  table.diff td.p { font-family:var(--mono); font-size:12px; color:var(--text-dim);
+                    white-space:nowrap; }
+  table.diff td.v { font-family:var(--mono); font-size:12px; word-break:break-word;
+                    max-width:340px; }
+  table.diff tr.chg td { background:rgba(255,180,84,.10); }
+  table.diff tr.chg td.p { box-shadow:inset 2px 0 0 var(--warn); color:var(--warn); }
+  .tlwrap { max-height:520px; overflow:auto; }
+  table.tl td.t  { font-family:var(--mono); font-size:12px; color:var(--text-dim);
+                   text-align:right; white-space:nowrap; width:1%; }
+  table.tl td.ty { font-family:var(--mono); font-size:12px; color:var(--info);
+                   white-space:nowrap; }
+  table.tl td.s  { font-family:var(--mono); font-size:12px; word-break:break-word; }
+  table.tl tr.knife td.ty { color:var(--accent); font-weight:700; }
+  table.tl tr.knife td { background:rgba(45,212,122,.07); }
+
   @media (max-width:520px) {
     body { padding:10px; }
     .grid { grid-template-columns:1fr; }
@@ -157,6 +198,46 @@
   <div id="probeResult"></div>
 </section>
 
+<section class="card">
+  <div class="probehead">
+    <h2 style="margin:0">Message trace</h2>
+    <span style="flex:1"></span>
+    <button id="copyTrace" type="button" class="hidden">Copy result JSON</button>
+  </div>
+  <p class="dim small" style="margin:0 0 12px; max-width:860px; line-height:1.55">
+    Taps the decoded inbound BLE stream, sends <strong>one</strong> curated
+    command, then records <em>every</em> message the mower pushes back for a few
+    seconds. This is what separates the three possibilities for
+    <span class="mono">set_blade_height</span>: a
+    <span class="mono">driver.toapp_knife_status_change</span> in the timeline
+    means the mower <strong>accepted</strong> the command and only our read-back
+    is stale; driver traffic without a knife event means it
+    <strong>replied but refused</strong>; no new traffic at all means it
+    <strong>ignored</strong> it. Run <span class="mono">noop</span> first — that
+    sends nothing, so whatever it captures is the mower&rsquo;s unprompted
+    background chatter, which is the baseline every other run must be read
+    against. Nothing on the command list moves the mower or spins the blades.
+  </p>
+  <div class="ctl">
+    <label>Command <select id="traceCmd" aria-label="Trace command"></select></label>
+    <label id="traceValWrap">Height (mm)
+      <input id="traceVal" type="number" min="10" max="120" step="1" value="35">
+    </label>
+    <label>Listen for
+      <select id="traceSecs" aria-label="Listen seconds">
+        <option value="6">6 s</option>
+        <option value="12" selected>12 s</option>
+        <option value="20">20 s</option>
+        <option value="30">30 s</option>
+      </select>
+    </label>
+    <button id="traceBtn" type="button">Run trace</button>
+    <span id="traceState" class="dim"></span>
+  </div>
+  <p id="traceWhy" class="dim small mono" style="margin:0 0 12px; line-height:1.5"></p>
+  <div id="traceResult"></div>
+</section>
+
 <script>
 "use strict";
 var $ = function (s) { return document.querySelector(s); };
@@ -190,6 +271,7 @@ async function loadMowers() {
     }).join("");
     if (list.length) {
       mower = list[0].name;
+      syncButtons();
       refresh();
     } else {
       banner("No mowers configured — run onboarding first.");
@@ -202,6 +284,13 @@ $("#mower").addEventListener("change", function (e) {
   mower = e.target.value;
   $("#probeResult").innerHTML = "";
   $("#probeState").textContent = "";
+  // A trace belongs to one mower — drop the stale result rather than let it be
+  // read (or copied to a developer) as if it came from the newly selected one.
+  $("#traceResult").innerHTML = "";
+  $("#traceState").textContent = "";
+  $("#copyTrace").classList.add("hidden");
+  lastTrace = null;
+  syncButtons();
   refresh();
 });
 $("#pause").addEventListener("click", function () {
@@ -350,10 +439,10 @@ function renderMatrix(probes) {
     : "";
 }
 async function runProbe() {
-  if (!mower || probing) return;
+  if (!mower || busy()) return;
   probing = true;
-  var btn = $("#probeBtn"), st = $("#probeState");
-  btn.disabled = true;
+  var st = $("#probeState");
+  syncButtons();
   var t0 = Date.now();
   st.textContent = "Probing… (takes ~30 s)";
   var tick = setInterval(function () {
@@ -373,13 +462,238 @@ async function runProbe() {
     st.textContent = "Probe failed: " + e.message;
   } finally {
     clearInterval(tick);
-    btn.disabled = false;
     probing = false;
+    syncButtons();
   }
 }
 $("#probeBtn").addEventListener("click", runProbe);
 
+// ── Message trace ───────────────────────────────────────────────────────────
+// Sends one allowlisted command and reports every LubaMsg the mower pushes back
+// during the window.  The server owns the allowlist; this page only renders it.
+var traceMeta = null;   // {default_seconds, max_seconds, default_value, commands}
+var tracing = false;
+var lastTrace = null;   // the raw response, kept for "Copy result JSON"
+
+function busy() { return probing || tracing; }
+function syncButtons() {
+  $("#probeBtn").disabled = busy();
+  $("#traceBtn").disabled = busy() || !traceMeta || !mower;
+}
+
+function traceEntry() {
+  if (!traceMeta) return null;
+  var key = $("#traceCmd").value;
+  return traceMeta.commands.filter(function (c) { return c.key === key; })[0] || null;
+}
+function syncTraceCmd() {
+  var e = traceEntry();
+  $("#traceValWrap").classList.toggle("hidden", !(e && e.takes_value));
+  $("#traceWhy").textContent = e ? e.why : "";
+}
+async function loadTraceCommands() {
+  try {
+    var r = await fetch("/api/diag/trace/commands");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    traceMeta = await r.json();
+    $("#traceCmd").innerHTML = traceMeta.commands.map(function (c) {
+      return '<option value="' + esc(c.key) + '">' + esc(c.label) + "</option>";
+    }).join("");
+    // Select the first entry explicitly rather than relying on the implicit
+    // "first option wins" — the picker drives which command is sent.
+    if (traceMeta.commands.length) $("#traceCmd").value = traceMeta.commands[0].key;
+    if (traceMeta.default_value !== undefined) $("#traceVal").value = traceMeta.default_value;
+    syncTraceCmd();
+  } catch (e) {
+    $("#traceState").textContent = "Cannot load the command list: " + e.message;
+  }
+  syncButtons();
+}
+$("#traceCmd").addEventListener("change", syncTraceCmd);
+
+function fmtVal(v) {
+  if (v === null || v === undefined) return '<span class="dim">&mdash;</span>';
+  if (typeof v === "object") {
+    try { return esc(JSON.stringify(v)); } catch (e) { return esc(String(v)); }
+  }
+  if (v === "") return '<span class="dim">(empty)</span>';
+  return esc(v);
+}
+function jsonPre(v) {
+  var t;
+  try { t = JSON.stringify(v, null, 1); } catch (e) { t = String(v); }
+  return "<pre>" + esc(t) + "</pre>";
+}
+
+function renderTrace(d) {
+  var out = [];
+  if (d.error) out.push('<div class="banner">Server-side failure: ' + esc(d.error) + "</div>");
+
+  var sum = d.summary || {};
+  var sent = d.sent || {};
+  var isNoop = sent.command === "noop";
+  var knife = !!sum.saw_knife_event;
+  var why;
+  if (knife) {
+    why = "A knife-height change report arrived during the window — the mower ACCEPTED " +
+          "the command. If the height still reads wrong in the UI, the bug is in our " +
+          "read-back, not in the command.";
+  } else if (isNoop) {
+    why = "Expected for the control run: noop sends nothing, so no knife event should " +
+          "appear. Treat the messages below as the mower's unprompted background traffic.";
+  } else if (!sum.link_alive) {
+    why = "No inbound messages at all during the window — the BLE link was silent, so " +
+          "this run proves nothing about the command. Check the connection and re-run.";
+  } else {
+    why = "The mower was talking (see the message list) but never reported a knife-height " +
+          "change — it received our frame and did not act on it.";
+  }
+  out.push('<div class="verdict ' + (knife ? "yes" : "no") + '">' +
+    "saw_knife_event: " + (knife ? "YES" : "NO") +
+    ' <span class="dim" style="font-weight:500">(toapp_knife_status_change / DrvKnifeChangeReport)</span>' +
+    '<span class="sub">' + esc(why) + "</span></div>");
+
+  var head = [
+    ["sent", sent.command + (sent.args && Object.keys(sent.args).length
+      ? " " + JSON.stringify(sent.args) : "")],
+    ["window", (d.seconds || 0) + " s"],
+    ["messages", (sum.total_messages || 0) +
+      (sum.dropped_messages ? " (+" + sum.dropped_messages + " dropped over the cap)" : "")]
+  ];
+  if (sent.error) head.push(["send error", sent.error]);
+  out.push('<div class="scroll"><table class="kv">' + head.map(function (r) {
+    return "<tr><td>" + esc(r[0]) + "</td><td>" + fmtVal(r[1]) + "</td></tr>";
+  }).join("") + "</table></div>");
+
+  var byType = sum.by_type || {};
+  var types = Object.keys(byType);
+  if (types.length) {
+    out.push('<div class="sub-h">Message types</div><div>' + types.map(function (t) {
+      return '<span class="badge mute" style="margin:0 6px 6px 0">' +
+        esc(t) + " &times;" + esc(byType[t]) + "</span>";
+    }).join("") + "</div>");
+  }
+
+  var diff = d.state_diff || {};
+  var paths = Object.keys(diff);
+  if (paths.length) {
+    out.push('<div class="sub-h">State before &rarr; after</div>' +
+      '<div class="scroll"><table class="diff">' +
+      "<tr><th>Path</th><th>Before</th><th>After</th></tr>" +
+      paths.map(function (p) {
+        var row = diff[p] || {};
+        return '<tr class="' + (row.changed ? "chg" : "") + '">' +
+          '<td class="p">' + esc(p) + "</td>" +
+          '<td class="v">' + fmtVal(row.before) + "</td>" +
+          '<td class="v">' + fmtVal(row.after) + "</td></tr>";
+      }).join("") + "</table></div>" +
+      '<p class="dim small" style="margin:8px 0 0">Highlighted rows changed during ' +
+      "the window. An unchanged row is not proof of nothing happening &mdash; a value " +
+      "the mower never re-reports stays frozen at whatever it last sent.</p>");
+  }
+
+  var msgs = d.messages || [];
+  out.push('<div class="sub-h">Timeline (' + msgs.length + " frames, t = ms after the command was sent)</div>");
+  if (!msgs.length) {
+    out.push('<p class="dim small">No messages arrived during the window.</p>');
+  } else {
+    out.push('<div class="tlwrap"><table class="tl">' +
+      "<tr><th>t</th><th>Type</th><th>Summary</th></tr>" +
+      msgs.map(function (m) {
+        var isKnife = /knife/i.test(m.sub_message_type || "");
+        var t = m.t_ms_since_send;
+        return '<tr class="' + (isKnife ? "knife" : "") + '">' +
+          '<td class="t">' + (t >= 0 ? "+" : "") + esc(t) + " ms</td>" +
+          '<td class="ty">' + esc(m.sub_message_type) + "</td>" +
+          '<td class="s">' + esc(m.summary || "") +
+          "<details><summary>full JSON</summary>" +
+          jsonPre({ envelope: m.envelope, fields: m.fields }) + "</details></td></tr>";
+      }).join("") + "</table></div>");
+  }
+
+  if (d.note) out.push('<p class="dim small" style="margin:12px 0 0">' + esc(d.note) + "</p>");
+  $("#traceResult").innerHTML = out.join("");
+  $("#copyTrace").classList.remove("hidden");
+}
+
+async function runTrace() {
+  if (!mower || busy() || !traceMeta) return;
+  var e = traceEntry();
+  if (!e) return;
+  tracing = true;
+  syncButtons();
+  var st = $("#traceState");
+  var secs = parseInt($("#traceSecs").value, 10) || traceMeta.default_seconds || 12;
+  var body = { command: e.key, seconds: secs };
+  if (e.takes_value) body.value = parseInt($("#traceVal").value, 10) || traceMeta.default_value;
+  var left = secs;
+  st.textContent = "Listening… " + left + " s left";
+  var tick = setInterval(function () {
+    left -= 1;
+    st.textContent = left > 0 ? "Listening… " + left + " s left" : "Waiting for the server…";
+  }, 1000);
+  try {
+    var r = await fetch("/api/diag/" + encodeURIComponent(mower) + "/trace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (r.status === 409) {
+      st.textContent = "Another diagnostics run is in progress — wait for it to finish.";
+      return;
+    }
+    if (r.status === 400) {
+      var err = await r.json().catch(function () { return {}; });
+      st.textContent = "Rejected: " + (err.detail || "command not on the allowlist");
+      return;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    var d = await r.json();
+    lastTrace = d;
+    st.textContent = "Done — " + ((d.summary && d.summary.total_messages) || 0) +
+      " message(s) in " + secs + " s.";
+    renderTrace(d);
+  } catch (err2) {
+    st.textContent = "Trace failed: " + err2.message;
+  } finally {
+    clearInterval(tick);
+    tracing = false;
+    syncButtons();
+  }
+}
+$("#traceBtn").addEventListener("click", runTrace);
+
+// Copy the whole response so an operator can paste it straight to a developer.
+// navigator.clipboard needs a secure context; the textarea path covers plain
+// HTTP and older browsers.
+$("#copyTrace").addEventListener("click", async function () {
+  if (!lastTrace) return;
+  var btn = $("#copyTrace");
+  var text = JSON.stringify(lastTrace, null, 2);
+  var ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch (e) { ok = false; }
+  if (!ok) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+    document.body.removeChild(ta);
+  }
+  btn.textContent = ok ? "Copied!" : "Copy failed — select the JSON manually";
+  setTimeout(function () { btn.textContent = "Copy result JSON"; }, 2000);
+});
+
 loadMowers();
+loadTraceCommands();
 </script>
 </body>
 </html>

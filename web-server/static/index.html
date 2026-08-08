@@ -201,7 +201,13 @@
           <span>Cutting height</span>
           <span class="setting-val" id="height-val">— mm</span>
         </div>
-        <input type="range" id="height-slider" min="20" max="100" step="5" value="60"
+        <!-- Fallback range only.  Overridden by /api/status `limits` when the
+             mower reports a model pymammotion has an entry for — this one
+             (Luba-VA / HM442) has none, so these defaults are what you get.
+             30-70 is the common Luba 2 range; the mower reporting 50 mm is
+             consistent with it.  Narrow this once hardware testing pins the
+             real range and step (see docs/blade-height-findings.md). -->
+        <input type="range" id="height-slider" min="30" max="70" step="5" value="50"
                aria-label="Cutting height in millimetres">
         <!-- What the MOWER reports, kept separate from the slider (which is a
              command input).  Shows "adjusting…" while the height motor runs,

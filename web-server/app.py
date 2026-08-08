@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import socket
 import sys
 import time
@@ -110,6 +111,16 @@ state = State()
 # total wall-clock window ≈ 48 s before giving up.  Once exhausted, the user
 # must hit Reconnect — we don't pester a closed browser indefinitely.
 AUTO_RECONNECT_DELAYS = [1, 2, 5, 10, 30]
+
+# Which wire path /api/set/{name}/blade_height uses by default.  Overridable
+# per-request with {"method": ...} for A/B testing on hardware.
+#   "driver"  — MctlDriver.todev_knife_height_set (the documented live set)
+#   "mowctrl" — DrvMowCtrlByHand stop-form carrying cut_knife_height
+#   "both"    — send both, driver first
+# Default is "both": the driver command is the documented one, and mowctrl is
+# upstream's Luba-2+ path; sending both costs one extra BLE frame and covers
+# either firmware.  See docs/blade-height-findings.md.
+_BLADE_HEIGHT_METHOD = os.environ.get("LUBA_BLADE_HEIGHT_METHOD", "both")
 
 
 async def _auto_reconnect(name: str) -> None:
@@ -681,19 +692,22 @@ def _device_limits(h) -> "dict | None":
 
 
 def _current_blade_height(h) -> "int | None":
-    """Blade height (mm), preferring the live knife-change event stream.
+    """Blade height (mm) — the live report, except mid-move.
 
-    Over the BLE proxy, work.knife_height only updates from work reports or
-    cloud property pushes — neither flows while the mower idles, so it serves
-    a stale value indefinitely.  The toapp_knife_status_change event, however,
-    arrives over BLE whenever the height motor actually moves; its
-    cur_height/end_height is the authoritative live reading.  0 means 'not
-    reported' on the wire → maps to None / next fallback."""
+    report_data.work.knife_height rides the normal BLE report stream (RIT_WORK
+    is in the get_report_cfg subscription), so it IS live — at the mower's
+    current poll cadence, which is continuous while active but 60 s
+    docked-charging and 300 s idle (pymammotion ble_loop).  A height set
+    therefore schedules its own report requests; see post_setting.
+
+    The knife-change event is used ONLY while a move is in progress: nothing in
+    pymammotion ever clears events.blade_height_event, so preferring it
+    unconditionally lets one historical event (even one caused by the phone app
+    days earlier) pin this readout forever and mask the live value."""
     try:
         ev = h.snapshot.raw.events.blade_height_event
-        cur = int(ev.cur_height) or int(ev.end_height)
-        if cur:
-            return cur
+        if ev.is_start and int(ev.cur_height):
+            return int(ev.cur_height)
     except (AttributeError, TypeError, ValueError):
         pass
     try:
@@ -728,7 +742,35 @@ async def post_setting(name: str, setting: str, payload: dict = Body(...)):
     if setting == "blade_height":
         lo, hi = (limits["blade_height"]["min"], limits["blade_height"]["max"]) if limits else (20, 100)
         v: "int | float" = int(min(max(value, lo), hi))
-        await h.send_raw(h.commands.set_blade_height(int(v)))
+        # Two wire paths carry cutting height; which one a given firmware
+        # honours is model-dependent (see docs/blade-height-findings.md).
+        #   "driver"  — MctlDriver.todev_knife_height_set (DrvKnifeHeight).
+        #               Confirmed IGNORED on Luba-VA/HM442 fw 2.3.27.23:
+        #               undocked, live reports, height never moved off 50.
+        #   "mowctrl" — DrvMowCtrlByHand with main_ctrl=0/cut_knife_ctrl=0.
+        #               This is verbatim upstream's Luba-2+ *stop-blades* form
+        #               (pymammotion homeassistant/mower_api.py), which carries
+        #               cut_knife_height — so it sets height with the blade
+        #               control explicitly OFF.  Never spins the blades.
+        method = (payload.get("method") or _BLADE_HEIGHT_METHOD).lower()
+        if method == "mowctrl":
+            await h.send_raw(h.commands.operate_on_device(
+                main_ctrl=0, cut_knife_ctrl=0, cut_knife_height=int(v), max_run_speed=1.2))
+        elif method == "both":
+            await h.send_raw(h.commands.set_blade_height(int(v)))
+            await h.send_raw(h.commands.operate_on_device(
+                main_ctrl=0, cut_knife_ctrl=0, cut_knife_height=int(v), max_run_speed=1.2))
+        else:
+            await h.send_raw(h.commands.set_blade_height(int(v)))
+        # The height motor takes seconds to travel, and /api/status only reads
+        # the cached snapshot — ask the mower for fresh reports so the readback
+        # reflects reality instead of a pre-change value.
+        async def _height_readback() -> None:
+            for delay in (1.0, 4.0, 7.0):
+                await asyncio.sleep(delay)
+                with contextlib.suppress(Exception):
+                    await h.request_report_snapshot()
+        asyncio.create_task(_height_readback(), name=f"blade-readback-{name}")
     elif setting == "speed":
         lo, hi = (limits["working_speed"]["min"], limits["working_speed"]["max"]) if limits else (0.2, 0.6)
         v = round(min(max(value, lo), hi), 2)
@@ -1307,6 +1349,578 @@ async def diag_probe(name: str):
             ),
             "probes": probes,
         }
+
+
+# ── Live BLE message trace (backing diag.html's "Message trace" panel) ───────
+# WHY THIS EXISTS: set_blade_height(35) appears to do nothing — the mower keeps
+# reporting 50 mm — while set_cutter_mode works.  A before/after state diff
+# cannot separate "the mower ignored the command" from "the mower obeyed but
+# nothing re-reported the new height".  This endpoint settles it: it taps the
+# *decoded* inbound LubaMsg stream via broker.subscribe_unsolicited() (the same
+# hook wifi_over_proxy.py uses), snapshots the watched state, sends ONE curated
+# command, then records every frame that arrives for N seconds.  If a
+# driver.toapp_knife_status_change lands, the mower accepted the command and our
+# readback is the problem; if nothing driver-shaped lands at all, the mower is
+# ignoring or silently rejecting it.  Run `noop` as the control to see what the
+# mower pushes unprompted.
+#
+# THREE PROPERTIES OF THE TAP, all surfaced in the response `note`:
+#   1. broker.on_message() first tries to satisfy a pending send_and_wait()
+#      future; a frame that matches one is consumed and NEVER re-emitted to the
+#      event bus.  Every command this web-server sends goes out fire-and-forget
+#      via send_raw() (registers no future), so replies to a traced command do
+#      reach us — but a frame claimed by an in-flight library saga would not.
+#   2. broker.on_message() runs BEFORE the state reducer, so a captured frame is
+#      timestamped a hair earlier than the state change it causes.  The "after"
+#      snapshot is therefore read only once the whole window has closed.
+#   3. EventBus keeps a STRONG reference to the handler in its own dict, so
+#      dropping the Subscription would not stop delivery — it would leak the
+#      subscription permanently (no weakref cleanup, no __del__).  Cancelling in
+#      a finally block is mandatory, not optional.
+import json as _json
+
+try:  # pymammotion depends on betterproto2; guard anyway so a missing dep
+    import betterproto2 as _bp2  # can never stop app.py from importing.
+except Exception:  # noqa: BLE001
+    _bp2 = None
+
+# LubaMsg.<sub> → the oneof group name of that sub-message's inner frames.
+# Mirrors pymammotion.messaging.broker._LUBA_SUB_GROUP (private — copied rather
+# than imported so an upstream rename can't break the import) plus `pdt`, which
+# LubaMsg declares but that map omits.  Sub-messages absent here (null, ctrl)
+# fall through to the first-populated-field scan in _trace_decode().
+_TRACE_SUB_GROUP = {
+    "net":    "NetSubType",
+    "nav":    "SubNavMsg",
+    "sys":    "SubSysMsg",
+    "driver": "SubDrvMsg",
+    "ota":    "SubOtaMsg",
+    "mul":    "SubMul",
+    "pept":   "SubPeptMsg",
+    "base":   "BaseStationSubType",
+    "pdt":    "sub_pdt_type",
+}
+
+# Every member of LubaMsg's LubaSubMsg one-of, in declaration order.  Used as
+# the fallback when which_one_of is unavailable or fails, so a frame is still
+# attributed to a sub-message instead of landing in an "<undecoded>" bucket.
+_TRACE_SUB_FIELDS = ("net", "sys", "nav", "driver", "ota", "mul",
+                     "null", "pept", "base", "pdt", "ctrl")
+
+_TRACE_DEFAULT_SECONDS  = 12
+_TRACE_MAX_SECONDS      = 30
+_TRACE_DEFAULT_BLADE_MM = 35
+_TRACE_MAX_MESSAGES     = 400      # frames kept; the rest are only counted
+_TRACE_MAX_ITEMS        = 64       # list / bytes truncation threshold
+_TRACE_MAX_DEPTH        = 6        # recursion guard for nested map frames
+_TRACE_MAX_STR          = 512
+_TRACE_SIZE_BUDGET      = 400_000  # chars of rendered `fields` across one run
+
+# Snapshot paths diffed around the command.  knife_height + blade_height_event
+# are the pair that disagree (a stale report vs. the live knife-motor event);
+# cutter_mode/rpm are the control (a command we know works); sys_status /
+# sensor_status / cutter_work_mode_info catch a rejection that surfaces
+# elsewhere (e.g. the mower refusing while lifted or in a blocking state).
+_TRACE_WATCH = (
+    "report_data.work.knife_height",
+    "events.blade_height_event",
+    "mower_state.cutter_mode",
+    "mower_state.cutter_rpm",
+    "report_data.dev.sys_status",
+    "report_data.dev.sensor_status",
+    "report_data.cutter_work_mode_info",
+)
+
+
+def _trace_jsonable(v, depth: int = 0):
+    """JSON-safe rendering of a decoded protobuf value.
+
+    Recursively converts dataclasses (every betterproto2 message is one), enums
+    and bytes (→ hex); truncates any list/dict/bytes past _TRACE_MAX_ITEMS and
+    bails at _TRACE_MAX_DEPTH so a map-sized or self-referential frame can't run
+    away.  Never raises — falls back to repr()."""
+    try:
+        if v is None or isinstance(v, (bool, int, float)):
+            return v
+        if isinstance(v, str):
+            return v if len(v) <= _TRACE_MAX_STR else (
+                v[:_TRACE_MAX_STR] + f"…(+{len(v) - _TRACE_MAX_STR} chars)"
+            )
+        if isinstance(v, _enum.Enum):
+            return f"{v.name}({v.value})"
+        if isinstance(v, (bytes, bytearray)):
+            out = {"_bytes_len": len(v), "hex": bytes(v[:_TRACE_MAX_ITEMS]).hex()}
+            if len(v) > _TRACE_MAX_ITEMS:
+                out["_truncated"] = True
+            return out
+        if depth >= _TRACE_MAX_DEPTH:
+            return f"<{type(v).__name__} — depth limit>"
+        if isinstance(v, dict):
+            items = list(v.items())
+            out = {str(k): _trace_jsonable(x, depth + 1) for k, x in items[:_TRACE_MAX_ITEMS]}
+            if len(items) > _TRACE_MAX_ITEMS:
+                out["_truncated"] = f"+{len(items) - _TRACE_MAX_ITEMS} more keys"
+            return out
+        if isinstance(v, (list, tuple, set)):
+            items = list(v)
+            out = [_trace_jsonable(x, depth + 1) for x in items[:_TRACE_MAX_ITEMS]]
+            if len(items) > _TRACE_MAX_ITEMS:
+                out.append(f"…(+{len(items) - _TRACE_MAX_ITEMS} more of {len(items)})")
+            return out
+        if _dataclasses.is_dataclass(v) and not isinstance(v, type):
+            # Walk fields by name rather than dataclasses.asdict(): asdict
+            # deep-copies the whole tree and chokes on betterproto2's
+            # default_factory fields.  By-name also keeps the exact proto field
+            # names the state reducer matches on (e.g. toapp_knife_status_change).
+            out = {}
+            for f in _dataclasses.fields(v):
+                try:
+                    val = getattr(v, f.name)
+                except Exception:  # noqa: BLE001
+                    continue
+                if val is None:      # unset optional sub-message — pure noise
+                    continue
+                out[f.name] = _trace_jsonable(val, depth + 1)
+            return out
+        return repr(v)[:_TRACE_MAX_STR]
+    except Exception as exc:  # noqa: BLE001
+        return f"<unrenderable {type(v).__name__}: {exc}>"
+
+
+def _trace_summary(label: str, payload) -> str:
+    """One-line digest of a decoded frame — its scalar fields as k=v."""
+    if payload is None:
+        return label
+    bits: list[str] = []
+    try:
+        if _dataclasses.is_dataclass(payload) and not isinstance(payload, type):
+            for f in _dataclasses.fields(payload):
+                val = getattr(payload, f.name, None)
+                if val is None:
+                    continue
+                if isinstance(val, _enum.Enum):
+                    bits.append(f"{f.name}={val.name}")
+                elif isinstance(val, (bool, int, float)):
+                    bits.append(f"{f.name}={val}")
+                elif isinstance(val, str):
+                    if val:
+                        bits.append(f"{f.name}={val[:40]!r}")
+                elif isinstance(val, (list, tuple, bytes, bytearray, dict)):
+                    bits.append(f"{f.name}[{len(val)}]")
+                else:
+                    bits.append(f"{f.name}=<{type(val).__name__}>")
+                if len(bits) >= 8:
+                    bits.append("…")
+                    break
+    except Exception:  # noqa: BLE001
+        pass
+    return f"{label}: " + ", ".join(bits) if bits else f"{label} ({type(payload).__name__})"
+
+
+def _trace_decode(msg) -> dict:
+    """Split one inbound LubaMsg into type / summary / fields / envelope.
+
+    Top-level sub-message via which_one_of(msg, "LubaSubMsg") → "nav"/"driver"/
+    "sys"/…, then the inner one-of leaf via that sub-message's own oneof group.
+    Everything is individually guarded: an undecodable frame still produces a
+    row rather than aborting the trace."""
+    sub_name = None
+    sub_val = None
+    leaf_name = None
+    payload = None
+
+    if _bp2 is not None:
+        try:
+            sub_name, sub_val = _bp2.which_one_of(msg, "LubaSubMsg")
+        except Exception:  # noqa: BLE001
+            sub_name, sub_val = None, None
+    if sub_val is None:
+        # which_one_of unavailable or failed — find the populated sub-message by
+        # hand rather than dropping the frame into an unattributed bucket.
+        for fname in _TRACE_SUB_FIELDS:
+            try:
+                val = getattr(msg, fname, None)
+            except Exception:  # noqa: BLE001
+                continue
+            if val is not None and _dataclasses.is_dataclass(val) and not isinstance(val, type):
+                sub_name, sub_val = fname, val
+                break
+
+    if sub_val is not None:
+        group = _TRACE_SUB_GROUP.get(sub_name or "")
+        if group and _bp2 is not None:
+            try:
+                leaf_name, payload = _bp2.which_one_of(sub_val, group)
+            except Exception:  # noqa: BLE001
+                leaf_name, payload = None, None
+        if not leaf_name:
+            # Sub-message with no (or an unmapped) oneof group — take the first
+            # populated message-typed field instead of guessing a group name.
+            try:
+                for f in _dataclasses.fields(sub_val):
+                    val = getattr(sub_val, f.name, None)
+                    if val is not None and _dataclasses.is_dataclass(val) and not isinstance(val, type):
+                        leaf_name, payload = f.name, val
+                        break
+            except Exception:  # noqa: BLE001
+                pass
+
+    type_str = ".".join(x for x in (sub_name, leaf_name) if x) or "<undecoded>"
+    envelope = {}
+    for k in ("msgtype", "sender", "rcver", "msgattr", "seqs", "subtype", "timestamp"):
+        envelope[k] = _trace_jsonable(getattr(msg, k, None))
+    body = payload if payload is not None else sub_val
+    return {
+        "sub_message_type": type_str,
+        "summary": _trace_summary(type_str, body),
+        "fields": _trace_jsonable(body),
+        "envelope": envelope,
+        # The knife-height event under both names it can be recognised by: the
+        # SubDrvMsg field name and the payload's proto class.
+        "knife": (
+            leaf_name == "toapp_knife_status_change"
+            or type(payload).__name__ == "DrvKnifeChangeReport"
+        ),
+    }
+
+
+# ── Trace command allowlist ──────────────────────────────────────────────────
+# SAFETY AUDIT — every entry verified against pymammotion 0.8.9 command source
+# (mammotion/commands/messages/{driver,system,network}.py, device/handle.py).
+# NOTHING here drives a wheel motor, starts or cancels a job, spins the blade
+# disc, or docks/undocks.  Deliberately excluded for that reason:
+# set_blade_control / operate_on_device (blade disc), set_cutter_mode (writes a
+# blade-speed preset), start_job / cancel_job / return_to_dock / leave_dock,
+# set_speed, and every MctlNav write.
+async def _trace_send_noop(h, value: int) -> dict:
+    """SAFE: sends nothing at all.  Pure listen — the control run that shows
+    what the mower pushes unprompted, so a `set_blade_height` trace can be read
+    against a real baseline instead of against an assumption."""
+    return {}
+
+
+async def _trace_send_blade_height(h, value: int) -> dict:
+    """SAFE: MctlDriver(todev_knife_height_set=DrvKnifeHeight(knife_height=N)).
+    The command under investigation.  It drives only the cutting-deck height
+    screw — the same write /api/set/{name}/blade_height already performs from
+    the main UI — and cannot move the mower or spin the blade disc.  Clamped to
+    the mower's own reported model limits exactly as post_setting() does."""
+    limits = _device_limits(h)
+    lo, hi = (limits["blade_height"]["min"], limits["blade_height"]["max"]) if limits else (20, 100)
+    applied = int(min(max(int(value), lo), hi))
+    await h.send_raw(h.commands.set_blade_height(applied))
+    return {"requested_mm": int(value), "applied_mm": applied, "clamped_to": [lo, hi]}
+
+
+async def _trace_send_get_speed(h, value: int) -> dict:
+    """SAFE: MctlDriver(bidire_speed_read_set=DrvSrSpeed(rw=0)).  rw=0 is the
+    explicit READ flag and no speed value is carried, so nothing is applied."""
+    await h.send_raw(h.commands.get_speed())
+    return {}
+
+
+async def _trace_send_get_cutter_mode(h, value: int) -> dict:
+    """SAFE: MctlDriver(current_cutter_mode=AppGetCutterWorkMode()).  An empty
+    query message — the SET variant is a different field
+    (cutter_mode_ctrl_by_hand) and is not used here.  Useful as a known-good
+    comparison: this is a driver-layer read the firmware demonstrably answers."""
+    await h.send_raw(h.commands.get_cutter_mode())
+    return {}
+
+
+async def _trace_send_report_snapshot(h, value: int) -> dict:
+    """SAFE: DeviceHandle.request_report_snapshot() → one-shot todev_report_cfg
+    RPT_START count=1.  A telemetry request; sets no device state.  Two library
+    quirks to read its trace against: it is a silent no-op while a continuous BLE
+    stream is already active, and it awaits its own answer via
+    broker.send_and_wait(expected_field="toapp_report_data") — so the report frame
+    it triggers is consumed by that future and is the one message this trace
+    cannot see.  Knife events are unaffected (nothing ever awaits them)."""
+    if not hasattr(h, "request_report_snapshot"):
+        raise RuntimeError("DeviceHandle.request_report_snapshot missing from installed pymammotion")
+    await h.request_report_snapshot()
+    return {"ble_stream_active": bool(getattr(h, "ble_stream_active", False))}
+
+
+async def _trace_send_report_cfg(h, value: int) -> dict:
+    """SAFE: MctlSys(todev_report_cfg=ReportInfoCfg(act=RPT_START, count=0)).
+    Subscribes the mower to its continuous telemetry stream — it changes the
+    REPORTING CADENCE only, never mower behaviour.  This is the loudest listen
+    setting available, so a knife event that exists will show up.  The matching
+    get_report_cfg_stop() is always sent afterwards (see cleanup), and
+    pymammotion's own ble_polling_loop re-arms its normal subscription within
+    ~30 s regardless."""
+    await h.send_raw(h.commands.get_report_cfg(count=0))
+    return {"act": "RPT_START", "count": 0,
+            "cleanup": "get_report_cfg_stop() is sent when the window closes"}
+
+
+async def _trace_cleanup_report_cfg(h) -> None:
+    """Cancel the continuous report subscription opened by the probe above."""
+    await h.send_raw(h.commands.get_report_cfg_stop())
+
+
+async def _trace_send_ble_sync(h, value: int) -> dict:
+    """SAFE: DevNet(todev_ble_sync=3) — a session-priming handshake carrying no
+    payload beyond the sync type.  pymammotion's own BLE keep-alive loop sends
+    sync_type=2 on a fixed cadence; wifi_over_proxy.py sends sync_type=3 to open
+    the session that makes the firmware answer proto queries at all.  Worth
+    tracing because a rejected set_blade_height may simply mean no live session."""
+    await h.send_raw(h.commands.send_todev_ble_sync(sync_type=3))
+    return {"sync_type": 3}
+
+
+# key → {label, takes_value, why, send, cleanup}.  Any key not in this dict is
+# rejected with 400 — the endpoint never reflects a caller-supplied command name
+# onto h.commands.
+_TRACE_COMMANDS: dict[str, dict] = {
+    "noop": {
+        "label": "noop — listen only (control run)",
+        "takes_value": False,
+        "why": _trace_send_noop.__doc__,
+        "send": _trace_send_noop,
+        "cleanup": None,
+    },
+    "set_blade_height": {
+        "label": "set_blade_height(value) — the command under investigation",
+        "takes_value": True,
+        "why": _trace_send_blade_height.__doc__,
+        "send": _trace_send_blade_height,
+        "cleanup": None,
+    },
+    "get_speed": {
+        "label": "get_speed — read-only driver query",
+        "takes_value": False,
+        "why": _trace_send_get_speed.__doc__,
+        "send": _trace_send_get_speed,
+        "cleanup": None,
+    },
+    "get_cutter_mode": {
+        "label": "get_cutter_mode — read-only driver query (known-good control)",
+        "takes_value": False,
+        "why": _trace_send_get_cutter_mode.__doc__,
+        "send": _trace_send_get_cutter_mode,
+        "cleanup": None,
+    },
+    "request_report_snapshot": {
+        "label": "request_report_snapshot — one-shot telemetry request",
+        "takes_value": False,
+        "why": _trace_send_report_snapshot.__doc__,
+        "send": _trace_send_report_snapshot,
+        "cleanup": None,
+    },
+    "get_report_cfg": {
+        "label": "get_report_cfg(count=0) — open continuous telemetry, then stop",
+        "takes_value": False,
+        "why": _trace_send_report_cfg.__doc__,
+        "send": _trace_send_report_cfg,
+        "cleanup": _trace_cleanup_report_cfg,
+    },
+    "todev_ble_sync": {
+        "label": "todev_ble_sync(3) — session-priming handshake",
+        "takes_value": False,
+        "why": _trace_send_ble_sync.__doc__,
+        "send": _trace_send_ble_sync,
+        "cleanup": None,
+    },
+}
+
+_TRACE_NOTE = (
+    "Frames are read off broker.subscribe_unsolicited(), which only sees messages "
+    "the broker did NOT consume to satisfy a pending send_and_wait() future. In "
+    "pymammotion 0.8.9 exactly three fields are ever awaited that way "
+    "(toapp_report_data, toapp_all_hash_name, bidire_reqconver_path), so a report "
+    "frame can occasionally be swallowed by a background poll — but "
+    "toapp_knife_status_change is NEVER awaited, which is what makes "
+    "saw_knife_event trustworthy in both directions. Everything this server sends "
+    "goes out fire-and-forget via send_raw(), registering no future of its own. "
+    "The tap also runs before the state reducer, so a frame's timestamp precedes "
+    "the state change it causes; the 'after' snapshot is therefore read only once "
+    "the whole window has closed."
+)
+
+
+@app.get("/api/diag/trace/commands")
+async def diag_trace_commands():
+    """The trace allowlist, for the diag page's command picker.  Serving it keeps
+    the UI and the server's safety audit from drifting apart."""
+    return {
+        "default_seconds": _TRACE_DEFAULT_SECONDS,
+        "max_seconds": _TRACE_MAX_SECONDS,
+        "default_value": _TRACE_DEFAULT_BLADE_MM,
+        "commands": [
+            {
+                "key": key,
+                "label": e["label"],
+                "takes_value": e["takes_value"],
+                "why": " ".join((e["why"] or "").split()),
+            }
+            for key, e in _TRACE_COMMANDS.items()
+        ],
+    }
+
+
+async def _run_trace(h, name: str, key: str, entry: dict, value: int, seconds: int) -> dict:
+    """Subscribe → snapshot → send → capture for `seconds` → snapshot → report."""
+    captured: "list[tuple[float, object]]" = []
+    overflow = {"n": 0}
+
+    async def _on_msg(msg) -> None:
+        # Runs inside broker.on_message(), i.e. on the transport's receive path
+        # AHEAD of the state reducer — so it must stay microsecond-cheap and can
+        # never raise.  Capture only; all decoding happens after the window.
+        try:
+            if len(captured) < _TRACE_MAX_MESSAGES:
+                captured.append((time.monotonic(), msg))
+            else:
+                overflow["n"] += 1
+        except Exception:  # noqa: BLE001
+            pass
+
+    before: dict = {}
+    after: dict = {}
+    resolved: dict = {}
+    send_error: "str | None" = None
+    sub = None
+    t_send = time.monotonic()
+    try:
+        # Subscribe FIRST so a reply that beats our own await can't be missed.
+        # The returned Subscription must be kept and cancelled: EventBus holds
+        # the handler strongly in its own dict, so dropping this reference would
+        # leak the subscription forever rather than ending it.
+        sub = h.broker.subscribe_unsolicited(_on_msg)
+        before = {p: _diag_get(h, p) for p in _TRACE_WATCH}
+        try:
+            resolved = await entry["send"](h, value)
+        except Exception as exc:  # noqa: BLE001
+            send_error = f"{type(exc).__name__}: {exc}"
+        t_send = time.monotonic()
+        await asyncio.sleep(seconds)
+        after = {p: _diag_get(h, p) for p in _TRACE_WATCH}
+    finally:
+        if sub is not None:
+            with contextlib.suppress(Exception):
+                sub.cancel()
+        cleanup = entry.get("cleanup")
+        if cleanup is not None:
+            with contextlib.suppress(Exception):
+                await cleanup(h)
+
+    budget = _TRACE_SIZE_BUDGET
+    messages: list[dict] = []
+    by_type: dict[str, int] = {}
+    saw_knife = False
+    for ts, msg in captured:
+        try:
+            d = _trace_decode(msg)
+        except Exception as exc:  # noqa: BLE001
+            d = {"sub_message_type": "<undecodable>", "summary": f"{type(exc).__name__}: {exc}",
+                 "fields": {}, "envelope": {}, "knife": False}
+        by_type[d["sub_message_type"]] = by_type.get(d["sub_message_type"], 0) + 1
+        saw_knife = saw_knife or bool(d["knife"])
+        fields = d["fields"]
+        try:
+            cost = len(_json.dumps(fields, default=str))
+        except Exception:  # noqa: BLE001
+            fields, cost = {"_error": "fields not JSON-serialisable"}, 0
+        if cost > budget:
+            fields = {"_omitted": "response size cap reached — re-run with a shorter window"}
+            budget = 0
+        else:
+            budget -= cost
+        messages.append({
+            "t_ms_since_send": int(round((ts - t_send) * 1000)),
+            "sub_message_type": d["sub_message_type"],
+            "summary": d["summary"],
+            "fields": fields,
+            "envelope": d["envelope"],
+        })
+
+    state_diff = {
+        p: {"before": before.get(p), "after": after.get(p),
+            "changed": before.get(p) != after.get(p)}
+        for p in _TRACE_WATCH
+    }
+    return {
+        "ok": True,
+        "mower": name,
+        "seconds": seconds,
+        "sent": {
+            "command": key,
+            "label": entry["label"],
+            "args": resolved,
+            "why": " ".join((entry["why"] or "").split()),
+            "error": send_error,
+        },
+        "messages": messages,
+        "state_diff": state_diff,
+        "summary": {
+            "total_messages": len(messages),
+            "dropped_messages": overflow["n"],
+            "by_type": dict(sorted(by_type.items(), key=lambda kv: (-kv[1], kv[0]))),
+            # The verdict this whole tool exists to produce.
+            "saw_knife_event": saw_knife,
+            "link_alive": bool(messages),
+            "state_fields_changed": [p for p in _TRACE_WATCH if state_diff[p]["changed"]],
+        },
+        "note": _TRACE_NOTE,
+    }
+
+
+@app.post("/api/diag/{name}/trace")
+async def diag_trace(name: str, payload: dict = Body(default={})):
+    """Tap the decoded inbound BLE message stream around one curated command.
+
+    Body: {"command": "<allowlisted key>", "seconds": <1-30>, "value": <int>}.
+    409 while any diagnostics run (probe or trace) is in flight; 400 for a
+    command that is not on the allowlist."""
+    _cfg(name)
+    h = _handle(name)
+    body = payload if isinstance(payload, dict) else {}
+
+    key = str(body.get("command") or "noop")
+    entry = _TRACE_COMMANDS.get(key)
+    if entry is None:
+        raise HTTPException(
+            400, f"unknown trace command {key!r} — allowed: {', '.join(_TRACE_COMMANDS)}"
+        )
+    try:
+        seconds = int(body.get("seconds") or _TRACE_DEFAULT_SECONDS)
+    except (TypeError, ValueError):
+        raise HTTPException(400, '"seconds" must be an integer')
+    seconds = max(1, min(seconds, _TRACE_MAX_SECONDS))
+    raw_value = body.get("value")
+    try:
+        value = _TRACE_DEFAULT_BLADE_MM if raw_value is None else int(raw_value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, '"value" must be an integer')
+
+    # Same global lock as the capability probe: two runs would double the BLE
+    # traffic through one proxy and corrupt each other's before/after diffs.
+    if _PROBE_LOCK.locked():
+        raise HTTPException(409, "a diagnostics run (capability probe or trace) is already in progress")
+    async with _PROBE_LOCK:
+        try:
+            return await _run_trace(h, name, key, entry, value, seconds)
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # A diagnostic must never be able to take the server down: report the
+            # failure as data rather than letting it escape as a 500.
+            _LOGGER.exception("diag trace %s/%s crashed", name, key)
+            return {
+                "ok": False,
+                "mower": name,
+                "seconds": seconds,
+                "error": f"{type(exc).__name__}: {exc}",
+                "sent": {"command": key, "label": entry["label"], "args": {}, "error": None},
+                "messages": [],
+                "state_diff": {},
+                "summary": {"total_messages": 0, "dropped_messages": 0, "by_type": {},
+                            "saw_knife_event": False, "link_alive": False,
+                            "state_fields_changed": []},
+                "note": _TRACE_NOTE,
+            }
 
 
 @app.post("/api/reconnect/{name}")
