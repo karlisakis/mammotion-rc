@@ -736,6 +736,18 @@ main > * { min-width: 0; }   /* grid items must never force horizontal overflow 
   font-size: 14px;
   color: var(--text-dim);
 }
+/* Mower-reported value under a slider (the slider itself is the command). */
+.setting-sub {
+  margin-top: 2px;
+  min-height: 16px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.setting-sub.match     { color: var(--accent); }
+.setting-sub.differs   { color: var(--warn); }
+.setting-sub.adjusting { color: var(--info); }
+
 .setting-val {
   font-variant-numeric: tabular-nums;
   font-weight: 600;

@@ -681,12 +681,33 @@ def _device_limits(h) -> "dict | None":
 
 
 def _current_blade_height(h) -> "int | None":
-    """Blade height (mm) from the last work report, or None if not reported.
-    0 means 'not reported yet' on the wire, so it maps to None too."""
+    """Blade height (mm), preferring the live knife-change event stream.
+
+    Over the BLE proxy, work.knife_height only updates from work reports or
+    cloud property pushes — neither flows while the mower idles, so it serves
+    a stale value indefinitely.  The toapp_knife_status_change event, however,
+    arrives over BLE whenever the height motor actually moves; its
+    cur_height/end_height is the authoritative live reading.  0 means 'not
+    reported' on the wire → maps to None / next fallback."""
+    try:
+        ev = h.snapshot.raw.events.blade_height_event
+        cur = int(ev.cur_height) or int(ev.end_height)
+        if cur:
+            return cur
+    except (AttributeError, TypeError, ValueError):
+        pass
     try:
         return int(h.snapshot.raw.report_data.work.knife_height) or None
     except (AttributeError, TypeError, ValueError):
         return None
+
+
+def _blade_adjusting(h) -> bool:
+    """True while the knife-height motor reports an in-progress change."""
+    try:
+        return bool(h.snapshot.raw.events.blade_height_event.is_start)
+    except AttributeError:
+        return False
 
 
 @app.post("/api/set/{name}/{setting}")
@@ -961,7 +982,8 @@ async def status(name: str):
         "auto_retrying":  state.auto_retrying.get(name, False),
         "auto_gave_up":   state.auto_gave_up.get(name, False),
         "orientation":    _current_orientation(h),  # heading in degrees, or None
-        "blade_height":   _current_blade_height(h),  # mm from last work report, or None
+        "blade_height":   _current_blade_height(h),  # mm, live event preferred, or None
+        "blade_adjusting": _blade_adjusting(h),      # height motor currently moving
         "limits":         _device_limits(h),         # per-model slider bounds, or None
         "blades_on":      blades_on,     # mower-reported disc rotation, or None
         "cutter_mode":    cutter_mode,   # 0 normal / 1 slow / 2 fast, or None

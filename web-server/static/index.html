@@ -203,6 +203,10 @@
         </div>
         <input type="range" id="height-slider" min="20" max="100" step="5" value="60"
                aria-label="Cutting height in millimetres">
+        <!-- What the MOWER reports, kept separate from the slider (which is a
+             command input).  Shows "adjusting…" while the height motor runs,
+             then the settled value, tinted green when it matches the slider. -->
+        <div class="setting-sub" id="height-report" aria-live="polite"></div>
       </div>
       <div class="setting">
         <div class="setting-head">

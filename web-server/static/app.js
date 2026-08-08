@@ -37,6 +37,7 @@ const els = {
   bladesOff:     document.getElementById("blades-off"),
   heightSlider:  document.getElementById("height-slider"),
   heightVal:     document.getElementById("height-val"),
+  heightReport:  document.getElementById("height-report"),
   speedSlider:   document.getElementById("speed-slider"),
   speedVal:      document.getElementById("speed-val"),
   bladeChip:     document.getElementById("blade-chip"),
@@ -200,6 +201,9 @@ async function selectMower(name) {
   setStatus(`connecting ${name}…`, "connecting");
   lightOn = false;          // unknown on a fresh mower — assume off
   setLightLabel();
+  // Per-mower slider state: let telemetry seed this mower's height slider once.
+  heightTouchedFor = null;
+  heightDragging = false;
   await stopCamera({ silent: true });   // if a previous mower's camera was up
 
   const meta = mowersList.find(m => m.name === name);
@@ -277,8 +281,7 @@ async function pollStatus(name) {
     }
 
     // Scale the settings sliders to this model's real limits (available once
-    // the mower has reported its model info), and reflect the reported blade
-    // height — unless the user's thumb is mid-drag on the slider.
+    // the mower has reported its model info).
     if (s.limits && limitsFor !== name) {
       limitsFor = name;
       els.heightSlider.min = s.limits.blade_height.min;
@@ -286,9 +289,28 @@ async function pollStatus(name) {
       els.speedSlider.min  = s.limits.working_speed.min;
       els.speedSlider.max  = s.limits.working_speed.max;
     }
-    if (typeof s.blade_height === "number" && !heightDragging) {
-      els.heightSlider.value = s.blade_height;
-      els.heightVal.textContent = `${s.blade_height} mm`;
+    // Blade-height telemetry.  The slider is a COMMAND input: telemetry seeds
+    // it once per mower and never moves it again after the user touches it —
+    // the old snap-the-slider-every-poll behavior made every set look like it
+    // "jumped back" whenever the mower served a stale reading.  The mower's
+    // own reading lives in the separate #height-report readout instead:
+    // "adjusting…" while the height motor runs, then "mower: N mm", tinted by
+    // whether it matches the slider.
+    if (typeof s.blade_height === "number") {
+      if (heightTouchedFor !== name && !heightDragging) {
+        els.heightSlider.value = s.blade_height;
+        els.heightVal.textContent = `${s.blade_height} mm`;
+      }
+      if (s.blade_adjusting) {
+        els.heightReport.textContent = "adjusting…";
+        els.heightReport.className = "setting-sub adjusting";
+      } else {
+        els.heightReport.textContent = `mower: ${s.blade_height} mm`;
+        const match = Number(els.heightSlider.value) === s.blade_height;
+        els.heightReport.className = "setting-sub" + (match ? " match" : " differs");
+      }
+    } else {
+      els.heightReport.textContent = "";
     }
 
     // Blade telemetry: the chip shows the mower's own "disc rotating" sensor
@@ -620,6 +642,12 @@ async function bladesActionWithConfirm(name) {
 // once the mower has reported its model (per-mower, so a switch re-scales).
 let limitsFor = null;        // mower name the current slider bounds belong to
 let heightDragging = false;  // don't let the 3 s poll fight the user's thumb
+// Mower whose height slider the user has taken over.  Once set, telemetry
+// stops writing the slider position for that mower (it only updates the
+// separate "mower: N mm" readout) — otherwise a stale reading snaps the thumb
+// back a second after every adjustment, which is what made the control look
+// broken.  Reset on mower switch so a newly selected mower seeds normally.
+let heightTouchedFor = null;
 
 async function applySetting(setting, value, labelEl, unit) {
   if (!currentMower) return;
@@ -646,11 +674,18 @@ async function applySetting(setting, value, labelEl, unit) {
 
 els.heightSlider.oninput = () => {
   heightDragging = true;
+  heightTouchedFor = currentMower;   // the slider is the user's from now on
   els.heightVal.textContent = `${els.heightSlider.value} mm`;
 };
 els.heightSlider.onchange = () => {
   heightDragging = false;
+  const target = currentMower;
   applySetting("blade_height", Number(els.heightSlider.value), els.heightVal, "mm");
+  // Height changes are mechanical (the motor takes a few seconds).  Re-poll so
+  // the "mower: N mm" readout tracks adjusting… → the settled value.
+  for (const ms of [1500, 3500, 6000]) {
+    setTimeout(() => { if (currentMower === target) pollStatus(target); }, ms);
+  }
 };
 els.speedSlider.oninput = () => {
   els.speedVal.textContent = `${Number(els.speedSlider.value).toFixed(2)} m/s`;
