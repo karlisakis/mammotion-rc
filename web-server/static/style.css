@@ -17,6 +17,19 @@
  *             Deliberately excluded from `desktop` above so a 932px-wide
  *             iPhone keeps the tabbed shell.
  *
+ * FRAME-BUDGET WARNING — this page drives a machine.  A tap that misses or a
+ * stick that lags is a safety problem, not a polish problem, so the shell is
+ * built to leave the main thread and the compositor idle at rest:
+ *   · No `backdrop-filter`.  Three blurred fixed layers over a live video feed
+ *     and a 150 ms command loop is what made this app "1 tap in 20".  Depth is
+ *     an opaque token surface plus a hairline.  See theme.css's header.
+ *   · Every permanent animation is `transform`/`opacity` only, on a
+ *     pseudo-element — never box-shadow, background-position or filter.
+ *   · `contain: layout paint` on the panels, the video frame and the joystick
+ *     zone, so a telemetry tick or a stick move cannot dirty the document.
+ *   · `will-change` appears exactly three times, all on elements whose
+ *     transform is written from JS.  Adding a fourth needs a reason.
+ *
  * SCROLL WARNING — do not add overflow or fixed heights to html/body/main.
  * A non-visible `overflow-x` forces `overflow-y` to compute to `auto`, which
  * turns html/body into nested scroll containers — the exact configuration that
@@ -125,11 +138,17 @@ a.btn { text-decoration: none; color: var(--text); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The pulse drives theme.css's .dot::after halo (transform + opacity), never
+   the dot itself. Connected is the steady state of this app, so this animation
+   runs for the entire session in the always-visible top bar — it has to be a
+   pure compositor job or it repaints the whole bar 60x a second. */
 #status .dot { color: var(--text-3); }
 #status.connecting        { color: var(--warn); }
-#status.connecting .dot   { color: var(--warn); animation: dot-pulse 1.4s var(--ease) infinite; }
+#status.connecting .dot   { color: var(--warn); }
+#status.connecting .dot::after { animation: dot-pulse 1.4s var(--ease) infinite; }
 #status.connected         { color: var(--text); }
-#status.connected .dot    { color: var(--accent-fg); animation: dot-pulse 2s var(--ease) infinite; }
+#status.connected .dot    { color: var(--accent-fg); }
+#status.connected .dot::after  { animation: dot-pulse 2s var(--ease) infinite; }
 #status.disconnected      { color: var(--danger); }
 #status.disconnected .dot { color: var(--danger); }
 
@@ -173,6 +192,11 @@ main > * { min-width: 0; }   /* grid items must never force horizontal overflow 
   flex-direction: column;
   gap: 12px;
   padding: 14px;
+  /* Telemetry rewrites text inside these panels on every poll. Without
+     containment a single changed digit dirties layout and paint for the whole
+     document; with it the browser can stop at the panel's own box. `size` is
+     deliberately absent — these panels are sized by their content. */
+  contain: layout paint;
 }
 .panel .hr { margin: 2px 0; }
 
@@ -232,8 +256,12 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   overflow: hidden;
-  transition: border-color var(--dur-2) var(--ease),
-              box-shadow var(--dur-2) var(--ease);
+  /* border-color only. The old list also transitioned box-shadow, i.e. a
+     220 ms repaint of a full-width video container at the exact moment the
+     stream starts decoding. */
+  transition: border-color var(--dur-2) var(--ease);
+  /* Walls the decoding video off from the rest of the camera panel. */
+  contain: layout paint;
 }
 #video { position: absolute; inset: 0; }
 
@@ -259,20 +287,25 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
 #video-frame.joining #cam-spinner { display: flex; }
 
 /* A live feed marks its own frame — the one place the signal colour earns an
-   outline on this card — plus a badge on the frame, camera-app style.  Tinted
-   glass rather than a flat chip, so it stays legible over arbitrary video. */
+   outline on this card — plus a badge on the frame, camera-app style.  The
+   accent hairline carries the whole signal now; the doubled box-shadow ring it
+   used to sit under was a second painted pass around a live video for one extra
+   pixel of glow. */
 #video-frame.live {
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
+
+/* Near-opaque token surface, NOT frosted glass. A backdrop blur here is the
+   worst case of all: the backdrop is a 30 fps video, so the blur re-runs on
+   every decoded frame for as long as the camera is on. A 92% surface is a
+   single alpha blend, stays legible over arbitrary video, and still reads as
+   an overlay sitting on the picture. */
 #cam-live {
   position: absolute;
   top: 10px;
   left: 10px;
   z-index: 5;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
-  backdrop-filter: saturate(1.4) blur(10px);
-  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
   border: 1px solid var(--border-strong);
   color: var(--accent-fg);
   font-size: 11px;
@@ -301,18 +334,23 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
   width: 82px;
   height: 82px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--surface) 68%, transparent);
-  backdrop-filter: saturate(1.4) blur(10px);
-  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  /* Near-opaque, not frosted — see #cam-live. This dial also gets a new heading
+     every second, so a blurred backdrop would have re-blurred the video behind
+     it on every readout change on top of every video frame. */
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
   border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-1);   /* static, painted once — a genuine overlay */
   pointer-events: none;
   z-index: 5;
   color: var(--text);
   font: 600 11px/1 var(--font);
 }
 
-/* The ring carries the cardinal letters and rotates with the heading. */
+/* The ring carries the cardinal letters and rotates with the heading.
+   will-change #1 of 3, and warranted: app.js writes a new `transform` here
+   every second, so without the hint the browser promotes the ring, rasterises
+   it, then demotes it again once per second forever. An 82px layer is a
+   rounding error next to that churn. */
 .compass-ring {
   position: absolute;
   inset: 0;
@@ -360,6 +398,12 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
 #joystick-zone,
 #joystick-zone * { touch-action: none; }
 
+/* Nothing on the zone itself transitions or changes while you drag: every
+   property here is static, so the zone (and the radial-gradient rings inside
+   it) rasterises exactly once and is then only re-composited.  Containment
+   guarantees that the DOM nipplejs builds, moves and tears down inside this box
+   ~60x a second can never invalidate layout or paint outside it.  `size` is
+   deliberately NOT contained — the height is fluid (clamp/vh). */
 #joystick-zone {
   position: relative;
   width: 100%;
@@ -375,9 +419,28 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
   cursor: crosshair;
   -webkit-user-select: none;
   user-select: none;
-  transition: border-color var(--dur-1) var(--ease),
-              box-shadow var(--dur-1) var(--ease),
-              background var(--dur-1) var(--ease);
+  contain: layout paint;
+}
+
+/* The whole "commands are streaming" highlight lives on this pseudo-element and
+   is revealed with OPACITY ALONE.  It is generated content, so it is the first
+   child in paint order — always underneath .joy-rings, the hint and the stick.
+   What this replaces: .active used to transition border-color, background AND a
+   `0 0 26px` box-shadow on a ~380x320 box, starting at the precise instant
+   nipplejs was building the stick and the 150 ms command loop was spinning up.
+   That is a full repaint of the largest element on the Drive tab on every frame
+   of the transition, and it landed on exactly the taps the user reported
+   losing.  Here the tint and the ring rasterise once; the fade is composited. */
+#joystick-zone::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-1) var(--ease);
 }
 
 /* Concentric guide rings + a centre pip, purely decorative. */
@@ -417,13 +480,9 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
   transition: opacity var(--dur-1) var(--ease);
 }
 
-/* Commands are streaming: light the zone, swap the hint for a DRIVING chip. */
-#joystick-zone.active {
-  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
-              0 0 26px color-mix(in srgb, var(--accent) 14%, transparent);
-  background: color-mix(in srgb, var(--accent) 5%, var(--surface-2));
-}
+/* Commands are streaming: light the zone, swap the hint for a DRIVING chip.
+   Both are opacity-only. */
+#joystick-zone.active::before { opacity: 1; }
 #joystick-zone.active .joy-hint { opacity: 0; }
 
 #drive-indicator {
@@ -440,9 +499,25 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
 #joystick-zone.active #drive-indicator { display: inline-flex; }
 
 /* nipplejs writes its colour inline at construction time; !important keeps the
-   stick on the accent token so it re-tints instantly when the theme flips. */
-#joystick-zone .nipple .back  { background: var(--accent) !important; opacity: .18 !important; }
-#joystick-zone .nipple .front { background: var(--accent) !important; opacity: .92 !important; }
+   stick on the accent token so it re-tints instantly when the theme flips.
+   will-change #2 and #3, and the ones that actually matter: nipplejs sets
+   `transform` inline on these two elements on every pointermove.  A transform
+   written imperatively from JS is NOT auto-promoted the way a CSS transition or
+   animation is, so without the hint each move re-rasterises the slice of the
+   zone under the stick — including .joy-rings' repeating-radial-gradient, which
+   is expensive.  Two small layers (a 180px halo and its knob), created and torn
+   down with each drag because the mode is "dynamic".  This is the fix for the
+   "insane delay" on the stick itself. */
+#joystick-zone .nipple .back {
+  background: var(--accent) !important;
+  opacity: .18 !important;
+  will-change: transform;
+}
+#joystick-zone .nipple .front {
+  background: var(--accent) !important;
+  opacity: .92 !important;
+  will-change: transform;
+}
 
 /* ── Action grids ─────────────────────────────────────────────────────────── */
 
@@ -454,29 +529,57 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
 }
 .actions .span-2 { grid-column: 1 / -1; }
 
-/* Blades On arming state: the second tap confirms.  Danger-tinted and pulsing
-   so an armed button can never be mistaken for a normal one. */
+/* Blades On arming state: the second tap confirms.  Danger-tinted, with a
+   hairline ring pulsing outward so an armed button can never be mistaken for a
+   normal one.  The ring is a pseudo-element scaled and faded by the compositor;
+   the old keyframe animated `box-shadow`, repainting the button — and prompting
+   a paint of the panel behind it — 60x a second for as long as it stayed armed,
+   which is precisely while the user is trying to hit the confirm tap.
+   A hairline that expands also sits better with the "instrument" language than
+   the soft glow it replaces. */
 .btn-blades.armed {
   background: var(--danger);
   border-color: transparent;
   color: var(--danger-ink);
-  animation: blades-arm .9s var(--ease) infinite;
 }
-@keyframes blades-arm {
-  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--danger) 22%, transparent); }
+.btn-blades.armed::after {
+  content: "";                      /* .btn is position:relative in theme.css */
+  position: absolute;
+  inset: -1px;
+  border: 2px solid var(--danger);
+  border-radius: calc(var(--r-sm) + 1px);
+  opacity: 0;
+  pointer-events: none;
+  animation: ring-pulse .9s var(--ease) infinite;
+}
+
+/* Shared halo: one ring, scaled and faded, transform + opacity only.  Used by
+   every "this is live / this is armed" pulse on the page. */
+@keyframes ring-pulse {
+  0%        { opacity: .6; transform: scale(1); }
+  70%, 100% { opacity: 0;  transform: scale(1.05); }
 }
 
 /* ── Mowing panel ─────────────────────────────────────────────────────────── */
 
-/* Pulses only while the mower's own sensor says the disc is really spinning. */
+/* Pulses only while the mower's own sensor says the disc is really spinning —
+   which is exactly when you are most likely to be driving, so this one has to
+   be free.  Same compositor-only ring as the armed button (see ring-pulse). */
 #blade-chip.blades-live {
+  position: relative;
   background: var(--accent-soft);
   border-color: transparent;
   color: var(--accent-fg);
-  animation: blades-live 1.4s var(--ease) infinite;
 }
-@keyframes blades-live {
-  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+#blade-chip.blades-live::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 2px solid var(--accent);
+  border-radius: var(--r-full);
+  opacity: 0;
+  pointer-events: none;
+  animation: ring-pulse 1.4s var(--ease) infinite;
 }
 
 /* Segmented-control busy state (theme.css only covers .btn). */
@@ -618,12 +721,19 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
   height: 8px;
   border-radius: 50%;
   background: var(--warn);
-  border: 2px solid var(--bg);
+  /* Punches out of the bar it sits on — the bar is --surface now that it is
+     opaque rather than a --bg tint behind a blur. */
+  border: 2px solid var(--surface);
   box-sizing: content-box;
 }
 
 /* ── Emergency STOP (fixed above the tab bar; reachable from every tab) ───── */
 
+/* Opaque --surface, matching .tabbar directly below it: the two fixed bars read
+   as one chrome slab sitting on the page, split by the hairline between them.
+   This was the third permanently-visible blurred layer — a fixed, full-width
+   element re-blurring the content scrolling behind it on every frame, sitting
+   over the same 150 ms command loop it is supposed to be able to interrupt. */
 #stop-bar {
   position: fixed;
   left: 0;
@@ -633,9 +743,7 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
   display: flex;
   justify-content: center;
   padding: 10px max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left));
-  background: color-mix(in srgb, var(--bg) 86%, transparent);
-  backdrop-filter: saturate(1.6) blur(14px);
-  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  background: var(--surface);
   border-top: 1px solid var(--border);
 }
 
@@ -660,19 +768,20 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
   -webkit-user-select: none;
   user-select: none;
   touch-action: manipulation;
-  transition: filter var(--dur-1) var(--ease),
-              transform var(--dur-1) var(--ease),
-              box-shadow var(--dur-1) var(--ease);
+  /* transform + opacity ONLY.  The old list transitioned `filter` and a 16px
+     blur box-shadow across a full-width bar, so every press of the emergency
+     control repainted it — and re-blurred the bar behind it — on every frame of
+     a 140 ms transition, twice (down and up).  On the one control that must
+     never feel laggy. */
+  transition: transform var(--dur-1) var(--ease),
+              opacity var(--dur-1) var(--ease);
 }
 .btn-stop .ico, .btn-stop .btn-ico { width: 22px; height: 22px; }
 @media (hover: hover) {
-  .btn-stop:hover { filter: brightness(1.07); }
+  /* Untransitioned: one paint on pointer-enter, fine pointers only. */
+  .btn-stop:hover { box-shadow: 0 2px 18px color-mix(in srgb, var(--danger) 55%, transparent); }
 }
-.btn-stop:active {
-  transform: scale(.985);
-  filter: brightness(.94);
-  box-shadow: 0 1px 8px color-mix(in srgb, var(--danger) 24%, transparent);
-}
+.btn-stop:active { transform: scale(.985); opacity: .88; }
 .btn-stop:focus-visible { outline: 2px solid var(--danger); outline-offset: 3px; }
 
 /* An emergency control is NEVER pointer-locked by the busy system.  It still
@@ -684,10 +793,12 @@ body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
 .btn-stop[aria-busy="true"] .btn-ico { visibility: hidden; }
 
 /* A danger-toned button flashing accent-green would read wrong, so STOP settles
-   with a brightness pulse instead of theme.css's flash-ok/flash-fail. */
+   with its own pair: ok is a physical "thump" (a scale pulse), fail is a blink.
+   Both are compositor properties — ok used to animate `filter: brightness()`,
+   which repaints the bar and is fired on every single STOP press. */
 .btn-stop.flash-ok   { animation: stop-ok   600ms var(--ease); }
 .btn-stop.flash-fail { animation: stop-fail 600ms var(--ease); }
-@keyframes stop-ok   { 35% { filter: brightness(1.4); } }
+@keyframes stop-ok   { 30% { transform: scale(1.018); } }
 @keyframes stop-fail { 20%, 60% { opacity: .45; } }
 
 /* ── Toasts ───────────────────────────────────────────────────────────────── */

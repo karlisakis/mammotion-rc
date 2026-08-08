@@ -514,9 +514,10 @@
       gap: 10px;
       margin: auto calc(-1 * var(--pad-x)) 0;   /* auto: sink to the bottom */
       padding: 14px var(--pad-x) calc(14px + env(safe-area-inset-bottom));
-      background: color-mix(in srgb, var(--bg) 88%, transparent);
-      backdrop-filter: saturate(1.6) blur(14px);
-      -webkit-backdrop-filter: saturate(1.6) blur(14px);
+      /* Opaque, not blurred: backdrop-filter forces the compositor to read
+         back and blur everything behind this bar on every frame it is on
+         screen.  See the performance rules in theme.css. */
+      background: var(--surface);
       border-top: 1px solid var(--border);
     }
     @media (min-width: 700px) {
@@ -526,8 +527,6 @@
         padding: 0;
         background: none;
         border-top: 0;
-        backdrop-filter: none;
-        -webkit-backdrop-filter: none;
       }
     }
   </style>

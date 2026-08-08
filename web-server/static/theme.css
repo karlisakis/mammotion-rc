@@ -24,6 +24,23 @@
    Consumers: index.html/style.css, onboarding.html, diag.html, and the login
    page. Page-specific rules belong in those files; never edit this one to fix
    a single page.
+
+   PERFORMANCE RULES (this is a real-time control surface, not a landing page)
+   --------------------------------------------------------------------------
+   1. No `backdrop-filter`, anywhere. It forces the compositor to read back
+      and blur everything behind the element on every frame it is on screen.
+      On the app shell — permanently-visible fixed bars sitting over a live
+      video feed and a 150 ms command loop — three of them cost most of a
+      phone's frame budget and made taps and joystick drags miss entirely.
+      Depth comes from an opaque token surface plus a hairline instead; that
+      also lets the compositor skip painting the content underneath.
+   2. Anything that runs forever (or during a drag) animates `transform` and
+      `opacity` ONLY. Never `box-shadow`, `background-position`, `filter`,
+      `width`/`height` or `top`/`left` — each of those repaints or relays out
+      every frame. A pulsing halo is a scaled + faded pseudo-element.
+   3. `will-change` is a memory cost, not a speed switch. Use it only where an
+      element's transform is written imperatively from JS (which the browser
+      cannot promote on its own). Two places qualify; see style.css.
    ========================================================================= */
 
 :root {
@@ -253,16 +270,25 @@ h3 { font-size: 15px; }
               transform var(--dur-1) var(--ease),
               opacity var(--dur-1) var(--ease);
 }
-.btn:hover:not(:disabled) { border-color: var(--border-strong); }
 .btn:active:not(:disabled) { transform: scale(.975); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Hover must be behind `hover: hover`. On a touchscreen the hover state latches
+   after a tap and never clears — an unguarded `filter: brightness()` therefore
+   parks that button on its own filtered layer for the rest of the session, and
+   there are a dozen buttons on this page. */
+@media (hover: hover) {
+  .btn:hover:not(:disabled) { border-color: var(--border-strong); }
+  /* Accent fill: a token-tinted halo rather than a filter, so it costs one
+     paint on pointer-enter instead of promoting the button permanently. */
+  .btn-primary:hover:not(:disabled) { box-shadow: 0 0 0 3px var(--accent-soft); }
+}
 
 .btn-primary {
   background: var(--accent);
   border-color: transparent;
   color: var(--accent-ink);
 }
-.btn-primary:hover:not(:disabled) { filter: brightness(1.05); }
 
 .btn-danger {
   background: var(--danger);
@@ -325,15 +351,33 @@ h3 { font-size: 15px; }
 
 /* Status dot — pair with a tone class for colour. */
 .dot {
+  position: relative;
   width: 7px; height: 7px;
   border-radius: 50%;
   background: currentColor;
   flex: none;
 }
-.dot-pulse { animation: dot-pulse 2s var(--ease) infinite; }
+
+/* The halo is a separate, invisible-by-default ring that the pulse scales and
+   fades. It is deliberately NOT an animated box-shadow: a box-shadow keyframe
+   repaints the dot AND whatever sits behind it on every single frame, forever,
+   and these dots live in the always-visible top bar and on the video overlay.
+   transform + opacity on a pseudo-element is handed to the compositor and the
+   ring rasterises exactly once. Un-pulsed dots pay nothing — no animation means
+   no layer. */
+.dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+}
+.dot-pulse::after { animation: dot-pulse 2s var(--ease) infinite; }
 @keyframes dot-pulse {
-  0%       { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
-  70%,100% { box-shadow: 0 0 0 6px transparent; opacity: .85; }
+  0%        { opacity: .5; transform: scale(1); }
+  70%, 100% { opacity: 0;  transform: scale(2.6); }
 }
 
 /* ── Form controls ───────────────────────────────────────────────────────── */
@@ -421,8 +465,13 @@ input[type="range"]::-moz-range-thumb {
 
 /* ── App chrome ──────────────────────────────────────────────────────────── */
 
-/* Fixed top bar. Translucent so content scrolling under it reads as depth —
-   the one place blur is justified. */
+/* Sticky top bar. Reads as chrome floating above the page because it is a
+   distinct opaque surface (--surface, one step off the --bg the page is painted
+   on) closed by a hairline — NOT because of a backdrop blur. This bar is on
+   screen 100% of the time; blurring the backdrop meant re-reading and
+   convolving the pixels behind it on every frame of every scroll, every video
+   frame and every telemetry tick. Opaque also lets the compositor skip painting
+   the content it covers, so it is cheaper than the original even at rest. */
 .topbar {
   position: sticky;
   top: 0;
@@ -433,14 +482,14 @@ input[type="range"]::-moz-range-thumb {
   min-height: var(--topbar-h);
   padding: 0 max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
   padding-top: env(safe-area-inset-top);
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: saturate(1.6) blur(14px);
-  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 
 /* Fixed bottom tab bar (phone). Hidden on wide screens where the full
-   dashboard is visible at once. */
+   dashboard is visible at once. Opaque for the same reason as .topbar — see
+   the note there; a fixed blurred layer is the single most expensive thing on
+   a mobile page. */
 .tabbar {
   position: fixed;
   left: 0; right: 0; bottom: 0;
@@ -450,9 +499,7 @@ input[type="range"]::-moz-range-thumb {
   grid-auto-columns: 1fr;
   min-height: var(--tabbar-h);
   padding-bottom: env(safe-area-inset-bottom);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: saturate(1.6) blur(14px);
-  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  background: var(--surface);
   border-top: 1px solid var(--border);
 }
 .tabbar button {
@@ -509,13 +556,25 @@ input[type="range"]::-moz-range-thumb {
   animation: spin .7s linear infinite;
 }
 
+/* The sweep is a translated child, not a moving background-position: the latter
+   re-rasterises the whole gradient every frame. Here the gradient is painted
+   once and the compositor slides it. */
 .skeleton {
-  background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2));
-  background-size: 200% 100%;
-  animation: shimmer 1.4s linear infinite;
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-2);
   border-radius: var(--r-sm);
 }
-@keyframes shimmer { to { background-position: -200% 0; } }
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--surface-3), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 1.4s linear infinite;
+  pointer-events: none;
+}
+@keyframes shimmer { to { transform: translateX(100%); } }
 
 /* ── Accessibility ───────────────────────────────────────────────────────── */
 
