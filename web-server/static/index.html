@@ -3,52 +3,111 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-  <meta name="theme-color" content="#0b0f14">
   <title>Luba Remote</title>
+
+  <!-- theme.js FIRST and synchronous: it stamps data-theme on <html> before any
+       stylesheet paints, so the app never flashes the OS theme.  It also
+       injects and maintains <meta name="theme-color"> from the --bg token —
+       do NOT hardcode a theme-color here or it will fight the toggle. -->
+  <script src="/static/theme.js"></script>
+  <link rel="stylesheet" href="/static/theme.css">
   <link rel="stylesheet" href="/static/style.css">
+
+  <!-- Installable / home-screen behaviour. -->
+  <!-- crossorigin is load-bearing, not boilerplate: per spec a manifest link is
+       fetched in credentials mode "omit", so the luba_auth cookie is not sent
+       and the auth middleware 401s it — the app silently fails to be
+       installable.  "use-credentials" sends the cookie. -->
+  <link rel="manifest" href="/static/manifest.webmanifest" crossorigin="use-credentials">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Luba">
+  <link rel="apple-touch-icon" href="/static/icon-180.png">
+
+  <!-- The only two external assets on the page (see docs/design-system.md). -->
   <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.23.0.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/nipplejs@0.10.1/dist/nipplejs.min.js"></script>
 </head>
-<body>
 
-  <header id="app-header">
-    <select id="mower" aria-label="Select mower"></select>
-    <button id="reconnect" class="btn btn-header" title="Reconnect to the mower">
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <polyline points="23 4 23 10 17 10"/>
-        <polyline points="1 20 1 14 7 14"/>
-        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+<!-- data-tab drives which phone panel is visible; ≥900px ignores it entirely
+     and lays every panel out at once. -->
+<body data-tab="drive">
+
+  <!-- ── Top bar ───────────────────────────────────────────────────────────
+       Row 1: mower picker + theme + settings.  Row 2 (wraps on phones, joins
+       row 1 from 640px up): the live status chips. -->
+  <header class="topbar">
+    <select id="mower" class="field" aria-label="Select mower"></select>
+
+    <button id="theme-toggle" class="btn btn-ghost btn-icon" type="button" title="Theme">
+      <!-- One icon per Theme mode; app.js reveals the active one. -->
+      <svg class="ico" data-theme-ico="system" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8.5 21h7M12 17v4"/>
       </svg>
-      <span>Reconnect</span>
+      <svg class="ico" data-theme-ico="light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden>
+        <circle cx="12" cy="12" r="4.2"/>
+        <path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/>
+      </svg>
+      <svg class="ico" data-theme-ico="dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden>
+        <path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z"/>
+      </svg>
+      <span class="visually-hidden">Change theme</span>
     </button>
-    <a href="/onboarding" id="settings-link" class="btn btn-header btn-icon" title="Re-scan / edit mowers" aria-label="Settings">
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
-        <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
-        <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
-        <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/>
-        <line x1="17" y1="16" x2="23" y2="16"/>
+
+    <a href="/onboarding" class="btn btn-ghost btn-icon" title="Setup &amp; mowers" aria-label="Setup and mowers">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 21v-6M4 11V3M12 21v-9M12 8V3M20 21v-4M20 13V3"/>
+        <path d="M1.5 15h5M9.5 8h5M17.5 17h5"/>
       </svg>
     </a>
-    <div class="chips">
-      <span id="status" class="chip chip-status">connecting…</span>
-      <span id="mower-status" class="chip chip-state" title="Mower state"></span>
-      <span id="battery" class="chip chip-battery" title="Mower battery"></span>
+
+    <div class="topbar-chips">
+      <span id="status" class="chip" title="Connection">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="status-text">connecting…</span>
+      </span>
+      <span id="mower-status" class="chip" title="Mower state" hidden></span>
+      <span id="battery" class="chip" title="Mower battery" hidden>
+        <svg class="ico ico-batt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" aria-hidden="true">
+          <rect x="1.6" y="7" width="17" height="10" rx="2.6"/>
+          <path d="M21.2 10.6v2.8" stroke-linecap="round"/>
+          <rect id="battery-fill" x="3.8" y="9.2" width="12" height="5.6" rx="1.2" fill="currentColor" stroke="none"/>
+          <path id="battery-bolt" d="M11.4 8.4 7.6 13h3.1l-.7 3.4L13.8 12h-3.1z" fill="currentColor" stroke="none"/>
+        </svg>
+        <span id="battery-pct">—</span>
+      </span>
     </div>
   </header>
 
   <main>
-    <!-- Fault message on its own full-width line so it wraps instead of
-         truncating in a cramped row (unreadable on a phone).  Clamped to two
-         lines; tap to expand the full text. -->
-    <div id="mower-error" class="fault-banner" role="alert"></div>
 
-    <section id="video-section">
+    <!-- Fault message lives outside the tab panels: a mower fault must be
+         visible whichever tab you are on.  Clamped to two lines; tap to
+         expand the full text. -->
+    <div id="mower-error" class="fault-banner" role="alert" hidden>
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10.3 3.6 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/>
+        <path d="M12 9v4.5M12 17.2v.01"/>
+      </svg>
+      <span id="mower-error-text"></span>
+    </div>
+
+    <!-- ── DRIVE ─────────────────────────────────────────────────────────── -->
+
+    <!-- No section header: on a phone the Drive tab has to fit camera +
+         joystick + STOP above the fold, and a "Camera" label over an obvious
+         video frame is the cheapest 36px to give back.  The LIVE badge lives
+         on the frame itself, camera-app style. -->
+    <section id="panel-camera" class="panel card" data-tab="drive" role="tabpanel" aria-labelledby="tab-drive">
       <div id="video-frame">
         <div id="video"></div>
 
+        <span id="cam-live" class="chip chip-accent" hidden>
+          <span class="dot dot-pulse" aria-hidden="true"></span>Live
+        </span>
+
         <div id="cam-placeholder" aria-hidden="true">
-          <svg class="ico ico-big" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="ico ico-xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/>
             <line x1="1" y1="1" x2="23" y2="23"/>
           </svg>
@@ -60,9 +119,9 @@
           <span>Connecting…</span>
         </div>
 
-        <!-- Heading-up compass, overlaid on the video while the camera is live.
-             The arrow is fixed pointing up (= the camera's forward view); the ring
-             (with N/E/S/W) rotates so N shows where geographic north is. -->
+        <!-- Heading-up compass, overlaid while the camera is live.  The arrow is
+             fixed pointing up (= the camera's forward view); the ring (N/E/S/W)
+             rotates so N shows where geographic north is. -->
         <div id="compass" class="compass" hidden aria-hidden="true">
           <div class="compass-ring" id="compass-ring">
             <span class="cardinal cardinal-n">N</span>
@@ -75,25 +134,28 @@
         </div>
       </div>
 
-      <div class="camera-controls">
-        <button id="cam-start" class="btn primary">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polygon points="23 7 16 12 23 17 23 7"/>
-            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-          </svg>
-          <span>Start Camera</span>
+      <div class="btn-row">
+        <button id="cam-start" class="btn btn-primary" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M23 7.5 16 12l7 4.5z"/><rect x="1" y="5" width="15" height="14" rx="2.5"/>
+            </svg>
+          </span>
+          <span>Start camera</span>
         </button>
-        <button id="cam-stop" class="btn" disabled>
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/>
-            <line x1="1" y1="1" x2="23" y2="23"/>
-          </svg>
-          <span>Stop Camera</span>
+        <button id="cam-stop" class="btn" type="button" disabled>
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/>
+              <line x1="1" y1="1" x2="23" y2="23"/>
+            </svg>
+          </span>
+          <span>Stop camera</span>
         </button>
       </div>
     </section>
 
-    <section id="controls">
+    <section id="panel-drive" class="panel card" data-tab="drive" role="tabpanel" aria-labelledby="tab-drive">
       <!-- Wrapper keeps the zone's parent non-flex: nipplejs's parentIsFlex
            heuristic otherwise drops the box offset and places the stick far
            from the finger (offset by the zone's distance from the page top). -->
@@ -101,105 +163,135 @@
         <div id="joystick-zone">
           <div class="joy-rings" aria-hidden="true"></div>
           <span class="joy-hint" aria-hidden="true">Hold &amp; drag to drive</span>
-          <span id="drive-indicator" aria-hidden="true">Driving</span>
+          <span id="drive-indicator" class="chip chip-accent" aria-hidden="true">
+            <span class="dot dot-pulse"></span>Driving
+          </span>
         </div>
       </div>
 
       <div class="actions">
-        <button id="pause" class="btn">
-          <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
-            <rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>
-          </svg>
+        <button id="pause" class="btn" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+              <rect x="6" y="4" width="4" height="16" rx="1.4"/><rect x="14" y="4" width="4" height="16" rx="1.4"/>
+            </svg>
+          </span>
           <span>Pause</span>
         </button>
-        <button id="resume" class="btn">
-          <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
-            <polygon points="6 3 21 12 6 21 6 3"/>
-          </svg>
+        <button id="resume" class="btn" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+              <path d="M7 4.2 19.5 12 7 19.8z"/>
+            </svg>
+          </span>
           <span>Resume</span>
         </button>
-        <button id="dock" class="btn">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-            <polyline points="9 22 9 12 15 12 15 22"/>
-          </svg>
+        <button id="dock" class="btn" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 9.6 12 2.8l9 6.8V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+              <path d="M9.2 22v-9h5.6v9"/>
+            </svg>
+          </span>
           <span>Dock</span>
         </button>
-        <button id="undock" class="btn">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M3 21h18"/><path d="M12 17V5"/><polyline points="6 11 12 5 18 11"/>
-          </svg>
+        <button id="undock" class="btn" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 21h18M12 17.5V5"/><path d="M6.5 10.5 12 5l5.5 5.5"/>
+            </svg>
+          </span>
           <span>Undock</span>
         </button>
-        <button id="light" class="btn span-2">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9 18h6"/><path d="M10 21h4"/>
-            <path d="M12 3a6 6 0 0 0-3.6 10.8c.7.55 1.1 1.33 1.1 2.2h5c0-.87.4-1.65 1.1-2.2A6 6 0 0 0 12 3z"/>
-          </svg>
+        <button id="light" class="btn span-2" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9.2 18h5.6M10.2 21h3.6"/>
+              <path d="M12 3a6 6 0 0 0-3.6 10.8c.7.55 1.1 1.33 1.1 2.2h5c0-.87.4-1.65 1.1-2.2A6 6 0 0 0 12 3z"/>
+            </svg>
+          </span>
           <span id="light-label">Light On</span>
         </button>
       </div>
     </section>
 
-    <section id="mow-panel">
-      <h2 class="panel-title">Mowing</h2>
+    <!-- ── MOW ───────────────────────────────────────────────────────────── -->
 
-      <!-- Live blade telemetry: blade-chip is the mower's OWN sensor bit for
-           "disc rotating" (ground truth, not our last command); rpm-chip shows
-           the live cutter RPM from the ~6 s cutter-mode probe. -->
-      <div class="mow-status">
-        <span class="chip" id="blade-chip">Blades: —</span>
-        <span class="chip" id="rpm-chip" hidden></span>
-        <span class="chip" id="progress-chip" hidden></span>
+    <section id="panel-mow" class="panel card" data-tab="mow" role="tabpanel" aria-labelledby="tab-mow">
+      <div class="panel-head">
+        <h2 class="u-label">Mowing</h2>
+        <!-- blade-chip is the mower's OWN "disc rotating" sensor bit (ground
+             truth, not our last command); rpm-chip is live cutter RPM from the
+             ~6 s cutter-mode probe. -->
+        <div class="chip-row">
+          <span class="chip" id="blade-chip">Blades: —</span>
+          <span class="chip" id="rpm-chip" hidden></span>
+          <span class="chip" id="progress-chip" hidden></span>
+        </div>
       </div>
 
       <div class="actions">
-        <button id="start-job" class="btn primary">
-          <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
-            <polygon points="6 3 21 12 6 21 6 3"/>
-          </svg>
-          <span>Start Mowing</span>
+        <button id="start-job" class="btn btn-primary" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+              <path d="M7 4.2 19.5 12 7 19.8z"/>
+            </svg>
+          </span>
+          <span>Start mowing</span>
         </button>
-        <button id="cancel-job" class="btn">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
-          </svg>
-          <span>Cancel Job</span>
+        <button id="cancel-job" class="btn" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9.2"/><path d="M15 9 9 15M9 9l6 6"/>
+            </svg>
+          </span>
+          <span>Cancel job</span>
         </button>
-        <!-- Manual mowing: blades while joystick-driving.  Blades On requires a
-             second confirming tap (see app.js); the mower's own lift/tilt/bumper
-             protections still cut the blades regardless of what we send. -->
-        <button id="blades-on" class="btn btn-blades">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M12 9V2M12 22v-7M9 12H2M22 12h-7" transform="rotate(45 12 12)"/>
-          </svg>
+      </div>
+
+      <hr class="hr">
+
+      <div class="panel-head">
+        <h3 class="u-label">Manual blades</h3>
+      </div>
+      <!-- Blades while joystick-driving.  Blades On requires a second
+           confirming tap (see app.js); the mower's own lift/tilt/bumper
+           protections still cut the blades regardless of what we send. -->
+      <div class="actions">
+        <button id="blades-on" class="btn btn-blades" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="2.6"/>
+              <path d="M12 9.4V2.6M12 21.4v-6.8M9.4 12H2.6M21.4 12h-6.8" transform="rotate(45 12 12)"/>
+            </svg>
+          </span>
           <span id="blades-on-label">Blades On</span>
         </button>
-        <button id="blades-off" class="btn">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="3"/>
-            <line x1="1" y1="1" x2="23" y2="23"/>
-          </svg>
+        <button id="blades-off" class="btn" type="button">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="2.6"/><path d="M2.5 2.5 21.5 21.5"/>
+            </svg>
+          </span>
           <span>Blades Off</span>
         </button>
       </div>
 
+      <hr class="hr">
+
       <div class="setting">
-        <div class="setting-head">
-          <span>Blade speed</span>
-        </div>
-        <div class="segment" id="cutter-mode-seg" role="group" aria-label="Blade speed preset">
-          <button class="seg-btn" data-mode="1">Eco</button>
-          <button class="seg-btn" data-mode="0">Normal</button>
-          <button class="seg-btn" data-mode="2">Fast</button>
+        <div class="setting-head"><span>Blade speed</span></div>
+        <div class="segmented" id="cutter-mode-seg" role="group" aria-label="Blade speed preset">
+          <button class="seg-btn" type="button" data-mode="1" aria-pressed="false">Eco</button>
+          <button class="seg-btn" type="button" data-mode="0" aria-pressed="false">Normal</button>
+          <button class="seg-btn" type="button" data-mode="2" aria-pressed="false">Fast</button>
         </div>
       </div>
 
       <div class="setting">
         <div class="setting-head">
           <span>Cutting height</span>
-          <span class="setting-val" id="height-val">— mm</span>
+          <span class="setting-val u-mono" id="height-val">— mm</span>
         </div>
         <!-- Fallback range only.  Overridden by /api/status `limits` when the
              mower reports a model pymammotion has an entry for — this one
@@ -210,14 +302,15 @@
         <input type="range" id="height-slider" min="30" max="70" step="5" value="50"
                aria-label="Cutting height in millimetres">
         <!-- What the MOWER reports, kept separate from the slider (which is a
-             command input).  Shows "adjusting…" while the height motor runs,
-             then the settled value, tinted green when it matches the slider. -->
+             command input).  "adjusting…" while the height motor runs, then the
+             settled value, tinted by whether it matches the slider. -->
         <div class="setting-sub" id="height-report" aria-live="polite"></div>
       </div>
+
       <div class="setting">
         <div class="setting-head">
           <span>Drive speed</span>
-          <span class="setting-val" id="speed-val">— m/s</span>
+          <span class="setting-val u-mono" id="speed-val">— m/s</span>
         </div>
         <!-- Fallback only; /api/status `limits` overrides. 1.2 m/s is
              pymammotion's Luba-family ceiling (the old 0.6 here was the Yuka
@@ -227,29 +320,127 @@
       </div>
     </section>
 
-    <section id="log-drawer">
-      <button id="log-toggle" aria-expanded="false" aria-controls="log">
-        <span>Diagnostics</span>
-        <svg class="ico caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="6 9 12 15 18 9"/>
-        </svg>
+    <!-- ── SYSTEM ────────────────────────────────────────────────────────── -->
+
+    <section id="panel-system" class="panel card" data-tab="system" role="tabpanel" aria-labelledby="tab-system">
+      <div class="panel-head">
+        <h2 class="u-label">Connection</h2>
+      </div>
+
+      <dl class="sys-list">
+        <div class="sys-row"><dt>Mower</dt><dd id="sys-mower" class="sys-val">—</dd></div>
+        <div class="sys-row"><dt>HC33 link</dt><dd id="sys-link" class="sys-val">—</dd></div>
+        <div class="sys-row"><dt>Last message</dt><dd id="sys-heartbeat" class="sys-val u-mono">—</dd></div>
+        <div class="sys-row"><dt>Battery</dt><dd id="sys-battery" class="sys-val u-mono">—</dd></div>
+        <div class="sys-row"><dt>State</dt><dd id="sys-state" class="sys-val">—</dd></div>
+      </dl>
+
+      <button id="reconnect" class="btn" type="button" title="Reconnect to the mower">
+        <span class="btn-ico">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21.5 4v5.5H16"/><path d="M2.5 20v-5.5H8"/>
+            <path d="M3.9 9.2a8.5 8.5 0 0 1 14-3.2l3.6 3.5M2.5 14.5 6.1 18a8.5 8.5 0 0 0 14-3.2"/>
+          </svg>
+        </span>
+        <span>Reconnect</span>
       </button>
-      <pre id="log"></pre>
+
+      <hr class="hr">
+
+      <div class="panel-head">
+        <h3 class="u-label">Appearance</h3>
+      </div>
+      <div class="segmented" id="theme-seg" role="group" aria-label="Colour theme">
+        <button type="button" data-theme="system" aria-pressed="false">System</button>
+        <button type="button" data-theme="light" aria-pressed="false">Light</button>
+        <button type="button" data-theme="dark" aria-pressed="false">Dark</button>
+      </div>
+
+      <hr class="hr">
+
+      <div class="sys-links">
+        <a class="btn" href="/onboarding">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 21v-6M4 11V3M12 21v-9M12 8V3M20 21v-4M20 13V3"/>
+              <path d="M1.5 15h5M9.5 8h5M17.5 17h5"/>
+            </svg>
+          </span>
+          <span>Setup &amp; mowers</span>
+        </a>
+        <a class="btn" href="/static/diag.html">
+          <span class="btn-ico">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2.5 12h4l2.5-6 4 12 2.5-6h6"/>
+            </svg>
+          </span>
+          <span>Diagnostic tools</span>
+        </a>
+      </div>
+    </section>
+
+    <section id="panel-diag" class="panel card" data-tab="system" role="tabpanel" aria-labelledby="tab-system">
+      <div id="log-drawer">
+        <button id="log-toggle" type="button" aria-expanded="false" aria-controls="log">
+          <span class="u-label">Diagnostics log</span>
+          <svg class="ico caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 9.5 12 15.5 18 9.5"/>
+          </svg>
+        </button>
+        <pre id="log"></pre>
+      </div>
     </section>
   </main>
 
-  <!-- Transient action feedback (success/failure), floated above the STOP bar. -->
-  <div id="toast-region" role="status" aria-live="polite"></div>
+  <!-- Transient action feedback, floated above the STOP bar. -->
+  <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
 
-  <!-- Emergency stop: fixed to the viewport bottom so it can never scroll away. -->
+  <!-- Emergency stop: fixed above the tab bar so it can never scroll away and
+       is reachable from every tab.  Never pointer-locked while busy. -->
   <div id="stop-bar">
-    <button id="stop" class="btn-stop">
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86"/>
-      </svg>
+    <button id="stop" class="btn-stop" type="button">
+      <span class="btn-ico">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M8.2 2h7.6L22 8.2v7.6L15.8 22H8.2L2 15.8V8.2z"/>
+          <path d="M9 9l6 6M15 9l-6 6"/>
+        </svg>
+      </span>
       <span>STOP</span>
     </button>
   </div>
+
+  <!-- Phone-only tab bar (hidden ≥900px, where every panel is laid out). -->
+  <nav class="tabbar" id="tabbar" role="tablist" aria-label="Sections">
+    <button id="tab-drive" class="tab" type="button" role="tab" data-tab="drive"
+            aria-selected="true" aria-controls="panel-camera panel-drive">
+      <svg class="ico ico-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9.2"/><circle cx="12" cy="12" r="3"/>
+        <path d="M12 2.8v3.4M12 17.8v3.4M2.8 12h3.4M17.8 12h3.4"/>
+      </svg>
+      <span>Drive</span>
+    </button>
+    <button id="tab-mow" class="tab" type="button" role="tab" data-tab="mow"
+            aria-selected="false" aria-controls="panel-mow">
+      <svg class="ico ico-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="2.4"/>
+        <path d="M12 9.6V3M12 21v-6.6M9.6 12H3M21 12h-6.6"/>
+        <path d="M12 9.6V3M12 21v-6.6M9.6 12H3M21 12h-6.6" transform="rotate(45 12 12)"/>
+      </svg>
+      <span>Mow</span>
+    </button>
+    <button id="tab-system" class="tab" type="button" role="tab" data-tab="system"
+            aria-selected="false" aria-controls="panel-system panel-diag">
+      <span class="tab-ico-wrap">
+        <svg class="ico ico-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="4" y="4" width="16" height="16" rx="3.2"/>
+          <rect x="9" y="9" width="6" height="6" rx="1.4"/>
+          <path d="M9 1.8v2.2M15 1.8v2.2M9 20v2.2M15 20v2.2M1.8 9H4M1.8 15H4M20 9h2.2M20 15h2.2"/>
+        </svg>
+        <span id="tab-system-badge" class="tab-badge" hidden></span>
+      </span>
+      <span>System</span>
+    </button>
+  </nav>
 
   <script src="/static/app.js"></script>
 </body>

@@ -3,51 +3,82 @@
 // Flow:
 //   1. /api/mowers populates the selector.
 //   2. Choosing a mower opens a WebSocket to /ws/joystick/{name} and wires
-//      nipplejs to send {x, y, force} frames at ~6 Hz.
+//      nipplejs to send {x, y, force} frames at ~6.5 Hz.
 //   3. Start Camera button POSTs /api/camera/{name}/start, gets Agora token,
 //      joins the channel.  Stop Camera reverses it.
-//   4. Pause/Resume/Go Home/STOP map to /api/action/{name}/{action}.
+//   4. Pause/Resume/Dock/Undock/STOP map to /api/action/{name}/{action}.
+//
+// The page is an app shell, not a document: on phones one tab's panels are in
+// the flow at a time (body[data-tab]), on ≥900px every panel is laid out at
+// once.  Tab switching is pure show/hide — nothing here navigates, and no
+// mower I/O depends on which tab is showing.
+
+const $ = (id) => document.getElementById(id);
 
 const els = {
-  mower:    document.getElementById("mower"),
-  reconnect:document.getElementById("reconnect"),
-  status:   document.getElementById("status"),
-  battery:  document.getElementById("battery"),
-  mowerStatus: document.getElementById("mower-status"),
-  mowerError:  document.getElementById("mower-error"),
-  video:      document.getElementById("video"),
-  videoFrame: document.getElementById("video-frame"),
-  camStart: document.getElementById("cam-start"),
-  camStop:  document.getElementById("cam-stop"),
-  compass:        document.getElementById("compass"),
-  compassRing:    document.getElementById("compass-ring"),
-  compassReadout: document.getElementById("compass-readout"),
-  joyZone:  document.getElementById("joystick-zone"),
-  pause:    document.getElementById("pause"),
-  resume:   document.getElementById("resume"),
-  dock:     document.getElementById("dock"),
-  undock:   document.getElementById("undock"),
-  stop:     document.getElementById("stop"),
-  light:    document.getElementById("light"),
-  lightLabel: document.getElementById("light-label"),
-  startJob:      document.getElementById("start-job"),
-  cancelJob:     document.getElementById("cancel-job"),
-  bladesOn:      document.getElementById("blades-on"),
-  bladesOnLabel: document.getElementById("blades-on-label"),
-  bladesOff:     document.getElementById("blades-off"),
-  heightSlider:  document.getElementById("height-slider"),
-  heightVal:     document.getElementById("height-val"),
-  heightReport:  document.getElementById("height-report"),
-  speedSlider:   document.getElementById("speed-slider"),
-  speedVal:      document.getElementById("speed-val"),
-  bladeChip:     document.getElementById("blade-chip"),
-  rpmChip:       document.getElementById("rpm-chip"),
-  progressChip:  document.getElementById("progress-chip"),
-  cutterSeg:     document.getElementById("cutter-mode-seg"),
-  log:       document.getElementById("log"),
-  logDrawer: document.getElementById("log-drawer"),
-  logToggle: document.getElementById("log-toggle"),
-  toastRegion: document.getElementById("toast-region"),
+  // chrome
+  mower:       $("mower"),
+  status:      $("status"),
+  statusText:  $("status-text"),
+  battery:     $("battery"),
+  batteryPct:  $("battery-pct"),
+  batteryFill: $("battery-fill"),
+  mowerStatus: $("mower-status"),
+  mowerError:  $("mower-error"),
+  mowerErrorText: $("mower-error-text"),
+  themeToggle: $("theme-toggle"),
+  themeSeg:    $("theme-seg"),
+  tabbar:      $("tabbar"),
+  tabSystemBadge: $("tab-system-badge"),
+
+  // camera
+  video:      $("video"),
+  videoFrame: $("video-frame"),
+  camLive:    $("cam-live"),
+  camStart:   $("cam-start"),
+  camStop:    $("cam-stop"),
+  compass:        $("compass"),
+  compassRing:    $("compass-ring"),
+  compassReadout: $("compass-readout"),
+
+  // drive
+  joyZone:  $("joystick-zone"),
+  pause:    $("pause"),
+  resume:   $("resume"),
+  dock:     $("dock"),
+  undock:   $("undock"),
+  stop:     $("stop"),
+  light:    $("light"),
+  lightLabel: $("light-label"),
+
+  // mow
+  startJob:      $("start-job"),
+  cancelJob:     $("cancel-job"),
+  bladesOn:      $("blades-on"),
+  bladesOnLabel: $("blades-on-label"),
+  bladesOff:     $("blades-off"),
+  heightSlider:  $("height-slider"),
+  heightVal:     $("height-val"),
+  heightReport:  $("height-report"),
+  speedSlider:   $("speed-slider"),
+  speedVal:      $("speed-val"),
+  bladeChip:     $("blade-chip"),
+  rpmChip:       $("rpm-chip"),
+  progressChip:  $("progress-chip"),
+  cutterSeg:     $("cutter-mode-seg"),
+
+  // system
+  reconnect:    $("reconnect"),
+  sysMower:     $("sys-mower"),
+  sysLink:      $("sys-link"),
+  sysHeartbeat: $("sys-heartbeat"),
+  sysBattery:   $("sys-battery"),
+  sysState:     $("sys-state"),
+  log:       $("log"),
+  logDrawer: $("log-drawer"),
+  logToggle: $("log-toggle"),
+
+  toastRegion: $("toast-region"),
 };
 
 const log = (msg) => {
@@ -67,41 +98,55 @@ const nick = (name) => {
 };
 
 const setStatus = (text, cls) => {
-  els.status.textContent = text;
+  els.statusText.textContent = text;
   els.status.title = text;   // the chip ellipsizes; full text on hover/long-press
   els.status.classList.remove("connected", "connecting", "disconnected");
   if (cls) els.status.classList.add(cls);
 };
 
-// Render the header battery chip.  pct === null → hidden (mower hasn't reported
-// yet, or link is down and we cleared it).  <20% turns it red; charging blue.
+// Render the topbar battery chip.  pct === null → hidden (mower hasn't reported
+// yet, or the link is down and we cleared it).  The gauge is inline SVG, not an
+// emoji: the fill rect's width tracks the charge and a bolt replaces it while
+// charging.  <20% turns it danger-red; charging turns it info-blue.
 const LOW_BATTERY_PCT = 20;
+const BATTERY_FILL_W = 12;          // px width of #battery-fill at 100% (viewBox units)
 const setBattery = (pct, charging) => {
   els.battery.classList.remove("low", "charging");
   if (pct === null || pct === undefined) {
-    els.battery.textContent = "";   // :empty CSS hides it
+    els.battery.hidden = true;
+    els.batteryPct.textContent = "";
     return;
   }
-  els.battery.textContent = `${charging ? "⚡" : "🔋"} ${pct}%`;
+  els.battery.hidden = false;
+  els.batteryPct.textContent = `${pct}%`;
+  const clamped = Math.max(0, Math.min(100, pct));
+  els.batteryFill.setAttribute("width", Math.max(1, (clamped / 100) * BATTERY_FILL_W).toFixed(2));
   if (charging) els.battery.classList.add("charging");
   else if (pct <= LOW_BATTERY_PCT) els.battery.classList.add("low");
 };
 
 // Render the mower state chip ("Mowing", "Charging", …) and any fault message
-// in the warn banner under the header.  null → hidden (:empty CSS).  Cleared
-// when the link is down so we never show a stale state.  The full fault text is
-// on the title attribute, and tapping the banner expands the clamped message.
+// in the banner under the topbar.  The banner sits OUTSIDE the tab panels so a
+// fault is visible whichever tab you are on.  null → hidden.  Cleared when the
+// link is down so we never show a stale state.  The full fault text is on the
+// title attribute, and tapping the banner expands the clamped message.
 const setMowerState = (label, error) => {
   els.mowerStatus.textContent = label || "";
-  els.mowerError.textContent  = error ? `⚠ ${error}` : "";
-  els.mowerError.title        = error || "Mower fault";
+  els.mowerStatus.hidden = !label;
+  els.sysState.textContent = label || "—";
+  els.mowerErrorText.textContent = error || "";
+  els.mowerError.hidden = !error;
+  els.mowerError.title = error || "Mower fault";
+  if (!error) els.mowerError.classList.remove("expanded");
 };
 
 // Visual state of the camera card: "off" → placeholder, "joining" → spinner,
-// "live" → video.  Purely cosmetic — it never gates the Agora logic.
+// "live" → video + LIVE chip + accent frame.  Purely cosmetic — it never gates
+// the Agora logic.
 const setCamUI = (state) => {
   els.videoFrame.classList.toggle("joining", state === "joining");
   els.videoFrame.classList.toggle("live", state === "live");
+  els.camLive.hidden = state !== "live";
 };
 
 // Cosmetic "driving" affordance on the joystick zone (accent glow + DRIVING
@@ -120,6 +165,72 @@ let headingTimer = null;   // setInterval handle for the compass heading poll
 let joyTimer = null;       // setInterval re-sending the held joystick state (keeps the mower moving)
 let joyState = { x: 0, y: 0, force: 0 };  // latest stick command, re-sent by joyTimer while held
 
+// ── Tab shell (phone) ───────────────────────────────────────────────────────
+// Show/hide only.  Drive is always the boot tab: driving while watching the
+// camera is the primary use case and must be one tap away with no scrolling.
+// ≥900px ignores all of this — CSS shows every panel and hides the tab bar.
+const TABS = ["drive", "mow", "system"];
+
+function setTab(name) {
+  if (!TABS.includes(name)) return;
+  // Defensive: nipplejs listens on `document`, so a release is still seen when
+  // the zone is hidden — but a context switch while driving should stop the
+  // mower regardless.  No-op unless the heartbeat is actually running.
+  joystickFailsafeStop();
+  document.body.dataset.tab = name;
+  for (const b of els.tabbar.querySelectorAll("button[data-tab]")) {
+    const on = b.dataset.tab === name;
+    b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  window.scrollTo(0, 0);
+}
+
+els.tabbar.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  if (b) setTab(b.dataset.tab);
+});
+els.tabbar.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  const i = TABS.indexOf(document.body.dataset.tab);
+  const next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length];
+  setTab(next);
+  els.tabbar.querySelector(`button[data-tab="${next}"]`).focus();
+  e.preventDefault();
+});
+setTab("drive");
+
+// ── Theme (window.Theme comes from theme.js, loaded first in <head>) ────────
+// One cycling button in the topbar (system → light → dark) plus an explicit
+// three-way segmented control on the System tab; both read the same state.
+function syncTheme() {
+  const mode = window.Theme.get();
+  for (const b of els.themeSeg.querySelectorAll("button[data-theme]")) {
+    const on = b.dataset.theme === mode;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", String(on));
+  }
+  for (const ico of els.themeToggle.querySelectorAll("[data-theme-ico]")) {
+    ico.toggleAttribute("hidden", ico.dataset.themeIco !== mode);
+  }
+  const label = `Theme: ${mode} (showing ${window.Theme.effective()})`;
+  els.themeToggle.title = label;
+  els.themeToggle.setAttribute("aria-label", label);
+}
+els.themeToggle.onclick = () => window.Theme.cycle();
+els.themeSeg.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-theme]");
+  if (b) window.Theme.set(b.dataset.theme);
+});
+document.documentElement.addEventListener("themechange", syncTheme);
+syncTheme();
+
+// Read a design token so JS-driven visuals (the nipplejs stick) stay on the
+// palette instead of hardcoding a colour.
+const token = (name) =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+// ── Compass ─────────────────────────────────────────────────────────────────
 // Fixed correction applied to the mower's reported heading before it drives the
 // compass. Leave 0 unless the compass reads offset from reality (e.g. if the
 // firmware's heading is magnetic or grid-relative rather than true north); then
@@ -193,12 +304,14 @@ async function loadMowers() {
     await selectMower(currentMower);
   } else {
     setStatus("no mowers configured");
+    els.sysMower.textContent = "none configured";
   }
 }
 
 async function selectMower(name) {
   currentMower = name;
   setStatus(`connecting ${name}…`, "connecting");
+  els.sysMower.textContent = nick(name);
   lightOn = false;          // unknown on a fresh mower — assume off
   setLightLabel();
   // Per-mower slider state: let telemetry seed this mower's height slider once.
@@ -265,12 +378,30 @@ async function pollStatus(name) {
     // Battery reflects the last decoded report; hide it whenever the link to
     // the mower isn't healthy so we never show a stale charge.
     const live = s.availability === "connected";
+    const silent = s.mower_silent_s;
     setBattery(live ? s.battery : null, s.charging);
     setMowerState(live ? s.status : null, live ? s.error : null);
 
-    // Surface the manual-reconnect prompt on the button itself, not just the
-    // status chip (warn-tinted nudge when the auto-retry loop has given up).
-    els.reconnect.classList.toggle("attention", !live && !!s.auto_gave_up);
+    // System tab's connection detail — the same truth as the topbar chips, but
+    // spelled out (and readable when the chip has ellipsized).
+    els.sysMower.textContent = nick(name);
+    els.sysLink.textContent = s.auto_retrying
+      ? "auto-reconnecting…"
+      : (s.auto_gave_up ? "gave up — press Reconnect" : String(s.availability));
+    els.sysLink.className = `sys-val ${live ? "ok" : "bad"}`;
+    els.sysHeartbeat.textContent =
+      (silent === null || silent === undefined) ? "—" : `${silent.toFixed(1)} s ago`;
+    els.sysBattery.textContent =
+      (live && typeof s.battery === "number")
+        ? `${s.battery}%${s.charging ? " · charging" : ""}`
+        : "—";
+
+    // Surface the manual-reconnect prompt on the button itself and badge the
+    // System tab, so the nudge is visible from Drive/Mow too (warn-tinted when
+    // the auto-retry loop has given up).
+    const needsAttention = !live && !!s.auto_gave_up;
+    els.reconnect.classList.toggle("attention", needsAttention);
+    els.tabSystemBadge.hidden = !needsAttention;
 
     // Reconcile the headlight toggle with the mower's actual state — the
     // firmware auto-offs the light, so trust the server's probe over our
@@ -315,6 +446,7 @@ async function pollStatus(name) {
 
     // Blade telemetry: the chip shows the mower's own "disc rotating" sensor
     // bit — ground truth, so a commanded-but-refused blades-on shows OFF here.
+    // The pulse only runs when the disc is genuinely spinning.
     if (typeof s.blades_on === "boolean") {
       els.bladeChip.textContent = `Blades: ${s.blades_on ? "ON" : "OFF"}`;
       els.bladeChip.classList.toggle("blades-live", s.blades_on);
@@ -328,7 +460,9 @@ async function pollStatus(name) {
     // Mark the active blade-speed preset from the mower's read-back.
     if (typeof s.cutter_mode === "number") {
       for (const b of els.cutterSeg.querySelectorAll(".seg-btn")) {
-        b.classList.toggle("active", Number(b.dataset.mode) === s.cutter_mode);
+        const on = Number(b.dataset.mode) === s.cutter_mode;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-pressed", String(on));
       }
     }
     // Job progress chip (only meaningful mid-job).
@@ -349,7 +483,6 @@ async function pollStatus(name) {
     }
 
     // Layer 2: have we ever heard back from the mower over BLE?
-    const silent = s.mower_silent_s;
     if (silent === null) {
       setStatus(`${name}: HC33 ok · waiting for mower`, "connecting");
     } else if (silent > MOWER_SILENT_S) {
@@ -378,7 +511,7 @@ els.reconnect.onclick = async () => {
     pending.delete("reconnect");
     setBusy(els.reconnect, false);
     flashResult(els.reconnect, ok);
-    toast(ok ? "Reconnected ✓" : "Reconnect failed", ok);
+    toast(ok ? "Reconnected" : "Reconnect failed", ok);
   }
 };
 
@@ -406,7 +539,7 @@ function startJoystick(name) {
     zone: els.joyZone,
     mode: "dynamic",
     dynamicPage: true,
-    color: "#2dd47a",
+    color: token("--accent") || "currentColor",   // CSS re-tints it on theme flip
     size: 180,
   });
 
@@ -497,40 +630,49 @@ async function action(name) {
 // One wrapper (runAction) gives every action button the same lifecycle:
 //   - the action name goes into `pending` so a double-tap can't double-fire
 //     the POST (the reported blades bug);
-//   - the button shows an inline spinner (.busy + aria-busy, clicks ignored
-//     via CSS pointer-events) while the request is out;
+//   - the button shows an inline spinner (aria-busy; theme.css swaps the icon
+//     slot for a spinner and ignores clicks) while the request is out;
 //   - on settle it flashes green/red and a small toast appears above the
 //     STOP bar.  Failures are already logged by action().
+//
+// The STOP button is deliberately exempt from the pointer-lock half of that:
+// it is a .btn-stop, not a .btn, and style.css re-asserts pointer-events on it
+// while busy.  An emergency control must never stop accepting presses; the
+// `pending` set alone de-dupes it.
 
 const pending = new Set();               // action names with a POST in flight
 const isPending = (...names) => names.some((n) => pending.has(n));
 
 function setBusy(btn, on) {
   if (!btn) return;
-  btn.classList.toggle("busy", on);
   if (on) btn.setAttribute("aria-busy", "true");
   else btn.removeAttribute("aria-busy");
 }
 
 function flashResult(btn, ok) {
   if (!btn) return;
-  btn.classList.remove("flash-ok", "flash-err");
+  btn.classList.remove("flash-ok", "flash-fail");
   void btn.offsetWidth;                  // restart the CSS animation
-  const cls = ok ? "flash-ok" : "flash-err";
+  const cls = ok ? "flash-ok" : "flash-fail";
   btn.classList.add(cls);
   setTimeout(() => btn.classList.remove(cls), 700);
 }
 
-// Minimal self-made toast: bottom-centre, above the STOP bar, auto-dismisses.
+// Toast: bottom-centre, above the STOP bar, auto-dismisses.  The icon is inline
+// SVG (static markup, never user data — the message itself is a text node).
+const TOAST_ICON = {
+  ok: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6.5 9.3 17.2 4 11.9"/></svg>',
+  err: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.2M12 16.4v.01"/></svg>',
+};
 function toast(msg, ok = true) {
   const t = document.createElement("div");
-  t.className = `toast ${ok ? "ok" : "err"}`;
-  t.textContent = msg;
+  t.className = `toast ${ok ? "toast-ok" : "toast-fail"}`;
+  t.innerHTML = ok ? TOAST_ICON.ok : TOAST_ICON.err;
+  t.appendChild(document.createTextNode(msg));
   els.toastRegion.appendChild(t);
-  requestAnimationFrame(() => t.classList.add("show"));
   setTimeout(() => {
-    t.classList.remove("show");
-    setTimeout(() => t.remove(), 300);   // after the fade-out transition
+    t.classList.add("out");
+    setTimeout(() => t.remove(), 300);   // after the fade-out animation
   }, 2500);
 }
 
@@ -552,7 +694,7 @@ async function runAction(name, btn, { withToast = true } = {}) {
     pending.delete(name);
     setBusy(btn, false);
     flashResult(btn, ok);
-    if (withToast) toast(ok ? `${ACTION_LABELS[name] || name} ✓` : `${name} failed`, ok);
+    if (withToast) toast(ok ? (ACTION_LABELS[name] || name) : `${name} failed`, ok);
   }
   return ok;
 }
@@ -665,7 +807,7 @@ async function applySetting(setting, value, labelEl, unit) {
     const { applied } = await r.json();
     labelEl.textContent = `${applied} ${unit}`;
     log(`set ${setting} = ${applied} ${unit}`);
-    toast(`${setting === "blade_height" ? "Height" : "Speed"} ${applied} ${unit} ✓`);
+    toast(`${setting === "blade_height" ? "Height" : "Speed"} ${applied} ${unit}`);
   } catch (e) {
     log(`set ${setting} threw: ${e}`);
     toast(`Set ${setting.replace("_", " ")} failed`, false);
@@ -700,7 +842,10 @@ els.speedSlider.onchange = () => {
 els.cutterSeg.addEventListener("click", async (e) => {
   const btn = e.target.closest(".seg-btn");
   if (!btn || !currentMower || pending.has("cutter_mode")) return;   // de-dupe
-  for (const b of els.cutterSeg.querySelectorAll(".seg-btn")) b.classList.toggle("active", b === btn);
+  for (const b of els.cutterSeg.querySelectorAll(".seg-btn")) {
+    b.classList.toggle("active", b === btn);
+    b.setAttribute("aria-pressed", String(b === btn));
+  }
   const target = currentMower;
   const label = btn.textContent.trim();
   pending.add("cutter_mode");

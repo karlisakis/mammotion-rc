@@ -1,353 +1,343 @@
-/* Luba Remote — stylesheet.
+/* Luba Remote — main control page.
  *
- * Layout: mobile-first CSS grid over named areas
- *   fault / camera / drive (joystick + actions) / mow / log
- * in three arrangements:
- *   - phone portrait (default): one column, STOP bar fixed at the bottom,
- *     main reserves bottom padding so nothing hides under it;
- *   - phone landscape (coarse pointer, short viewport): camera left (~55%),
- *     joystick + actions right, mow/log full-width below, STOP pinned over
- *     the joystick column so the camera stays clear;
- *   - ≥900px (tablet/desktop): true two-column grid centred at 1140px —
- *     camera + mowing panel left, joystick + actions + diagnostics right.
+ * Builds on static/theme.css (tokens + primitives).  Nothing here redefines a
+ * token or re-implements a primitive; it composes them into an app shell.
+ *
+ * SHELL
+ *   default   a native-style tabbed app: sticky .topbar, one tab's panels in
+ *             the flow at a time (body[data-tab] ↔ .panel[data-tab]), a
+ *             persistent STOP bar fixed above a fixed .tabbar.  Nothing
+ *             navigates; tabs show/hide.
+ *   desktop   ≥900px AND either tall enough or driven by a fine pointer — the
+ *             tab bar is removed and every panel is laid out at once on a
+ *             two-column grid (camera + telemetry left, drive + mowing right,
+ *             diagnostics full width below), centred at 1200px.
+ *   landscape phone   short + coarse: camera and joystick side by side on the
+ *             Drive tab so you can drive while watching, STOP still pinned.
+ *             Deliberately excluded from `desktop` above so a 932px-wide
+ *             iPhone keeps the tabbed shell.
  *
  * SCROLL WARNING — do not add overflow or fixed heights to html/body/main.
- * The previous sheet set `overflow-x: hidden` on BOTH html and body; a
- * non-visible overflow-x forces overflow-y to compute to `auto`, which turned
- * html and body into nested scroll containers — the exact configuration that
- * freezes touch scrolling on iOS Safari.  Horizontal protection now lives in
- * `overflow-x: clip` on body alone: `clip` clips paint without ever creating
- * a scroll container, so page scrolling stays fully native (touch, wheel,
- * trackpad).  The only touch-action:none on the page is the joystick zone.
+ * A non-visible `overflow-x` forces `overflow-y` to compute to `auto`, which
+ * turns html/body into nested scroll containers — the exact configuration that
+ * froze touch scrolling on iOS Safari once already.  theme.css already sets
+ * `overflow-x: clip` on body alone (`clip` never creates a scroll container).
+ * The ONLY `touch-action: none` on this page is the joystick zone.
  */
 
 :root {
-  --bg: #0b0f14; --surface: #121924; --surface-2: #1a2432;
-  --border: rgba(255,255,255,.07);
-  --text: #e8eef5; --text-dim: #8fa0b3;
-  --accent: #2dd47a; --accent-press: #24b968; --accent-ink: #04371c;
-  --danger: #ff5d5d; --warn: #ffb454; --info: #4aa8ff;
-  --radius: 14px; --radius-sm: 10px;
-  --shadow: 0 8px 28px rgba(0,0,0,.45);
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  /* Fixed STOP bar: 58px button + 2×10px padding.  main and the toast region
-     both reserve this (plus the safe-area inset) so content never hides. */
-  --stopbar-h: 78px;
+  /* Fixed STOP bar: 56px button + 2×10px padding + 1px border.  main, the
+     toast region and the bar's own offset all derive from this. */
+  --stopbar-h: 77px;
 }
 
-/* ── Base ─────────────────────────────────────────────────────────────────── */
+/* ── Icons ────────────────────────────────────────────────────────────────── */
 
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+.ico     { width: 20px; height: 20px; flex: none; display: block; }
+.ico-lg  { width: 23px; height: 23px; }
+.ico-xl  { width: 40px; height: 40px; opacity: .45; }
 
-html { overscroll-behavior-y: none; }   /* no pull-to-refresh mid-drive */
+/* Author styles beat the UA's [hidden] rule, and this sheet gives several
+   hidden-able elements (.ico, .chip, .panel, .fault-banner) an explicit
+   display.  `hidden` is a state, not a suggestion — make it absolute. */
+[hidden] { display: none !important; }
 
-body {
-  margin: 0;
-  font-family: var(--font);
-  background: var(--bg);
-  color: var(--text);
-  overflow-x: clip;   /* paint clip only — NOT a scroll container (see header) */
-}
-
-svg.ico { width: 18px; height: 18px; flex: none; display: block; }
-svg.ico-big { width: 44px; height: 44px; opacity: .5; }
-
-:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
-
-/* Kill the double-tap-zoom delay on controls; panning is unaffected. */
-button, select, a, input, .chip { touch-action: manipulation; }
-
-/* Controls are not text — don't let a long-press start a selection. */
-button, select, a, .chip, #joystick-zone, header, .toast {
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-/* ── Header ───────────────────────────────────────────────────────────────── */
-
-#app-header {
-  display: flex;
-  flex-wrap: wrap;
+/* Icon slot inside a button.  theme.css hides it while aria-busy is set; we
+   anchor the spinner here rather than letting theme's centred ::before sit on
+   top of the label. */
+.btn-ico {
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: calc(8px + env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 8px max(14px, env(safe-area-inset-left));
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.btn[aria-busy="true"]::before { content: none; }
+.btn[aria-busy="true"] .btn-ico::after,
+.btn-stop[aria-busy="true"] .btn-ico::after {
+  content: "";
+  visibility: visible;              /* the slot itself is visibility:hidden */
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: spin .7s linear infinite;
+}
+
+/* Settle flash: theme.css defines the keyframes at 220ms, which is too quick to
+   register on a control surface.  Stretch it; don't redefine it. */
+.btn.flash-ok, .btn.flash-fail { animation-duration: 600ms; }
+
+/* Links styled as buttons. */
+a.btn { text-decoration: none; color: var(--text); }
+
+/* Hover is a pointer affordance only — theme.css moves the border, we add the
+   surface lift so the whole control reads as hoverable.  The tone variants are
+   restated because this sheet loads after theme.css at equal specificity. */
+@media (hover: hover) {
+  .btn:hover:not(:disabled) { background: var(--surface-3); }
+  .btn-primary:hover:not(:disabled) { background: var(--accent); }
+  .btn-ghost:hover:not(:disabled) { background: var(--surface-2); }
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────────────── */
+
+/* On phones the status chips wrap onto a second row inside the bar; from 640px
+   up everything sits on one line. */
+.topbar {
+  flex-wrap: wrap;
+  row-gap: 6px;
+  padding-top: calc(4px + env(safe-area-inset-top));
+  padding-bottom: 7px;
 }
 
 #mower {
   flex: 1 1 120px;
+  width: auto;
   min-width: 0;
-  max-width: 340px;
+  max-width: 320px;
   min-height: 44px;
-  padding: 0 32px 0 12px;
-  font: 600 15px var(--font);
-  color: var(--text);
-  background: var(--surface-2)
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%238fa0b3' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E")
-    no-repeat right 12px center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  appearance: none;
-  -webkit-appearance: none;
+  font-size: 16px;               /* ≥16px or iOS zooms the page on focus */
+  font-weight: 560;
   text-overflow: ellipsis;
   cursor: pointer;
 }
 
-.btn-header {
-  min-height: 44px;
-  padding: 0 12px;
-  font-size: 13px;
-}
-.btn-icon { padding: 0; width: 44px; justify-content: center; }
-a.btn-header { text-decoration: none; color: var(--text); }
-
-/* Warn-tinted nudge when auto-reconnect has given up and a manual press is needed. */
-#reconnect.attention {
-  color: var(--warn);
-  border-color: rgba(255,180,84,.55);
-  box-shadow: 0 0 10px rgba(255,180,84,.18);
-}
-
-/* ── Status chips ─────────────────────────────────────────────────────────── */
-
-.chips {
-  flex: 1 1 100%;
+.topbar-chips {
+  flex: 1 0 100%;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-.chip:empty { display: none; }
-
-/* Connection chip: colored dot + text.  The text can be long, so the chip is
-   inline-block (not flex) — that lets text-overflow ellipsize the bare text
-   node sitting next to the ::before dot. */
-#status.chip-status {
-  display: inline-block;
+#status {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
-  line-height: 26px;          /* 28px chip minus the 1px borders */
+}
+#status-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#status::before {
-  content: "";
+#status .dot { color: var(--text-3); }
+#status.connecting        { color: var(--warn); }
+#status.connecting .dot   { color: var(--warn); animation: dot-pulse 1.4s var(--ease) infinite; }
+#status.connected         { color: var(--text); }
+#status.connected .dot    { color: var(--accent-fg); animation: dot-pulse 2s var(--ease) infinite; }
+#status.disconnected      { color: var(--danger); }
+#status.disconnected .dot { color: var(--danger); }
+
+#mower-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
   display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-#status.connected     { color: var(--text); }
-#status.connected::before    { background: var(--accent); animation: pulse-green 2s ease-out infinite; }
-#status.connecting    { color: var(--warn); }
-#status.connecting::before   { background: var(--warn);   animation: pulse-amber 1.2s ease-out infinite; }
-#status.disconnected  { color: var(--danger); }
-#status.disconnected::before { background: var(--danger); }
-
-@keyframes pulse-green {
-  0%       { box-shadow: 0 0 0 0 rgba(45,212,122,.5); }
-  70%,100% { box-shadow: 0 0 0 6px rgba(45,212,122,0); }
-}
-@keyframes pulse-amber {
-  0%       { box-shadow: 0 0 0 0 rgba(255,180,84,.5); }
-  70%,100% { box-shadow: 0 0 0 6px rgba(255,180,84,0); }
+  line-height: 24px;             /* 26px chip minus its 1px borders */
 }
 
-.chip-state { color: var(--text); }
-
-#battery { color: var(--accent); font-variant-numeric: tabular-nums; }
-#battery.low      { color: var(--danger); border-color: rgba(255,93,93,.4); }
+#battery { flex: none; color: var(--text-2); }
+#battery.low      { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 #battery.charging { color: var(--info); }
+.ico-batt { width: 22px; height: 22px; }
+#battery-bolt { display: none; }
+#battery.charging #battery-bolt { display: block; }
+#battery.charging #battery-fill { opacity: .3; }
 
-/* ── Layout: named-area grid ──────────────────────────────────────────────── */
+/* ── Layout ───────────────────────────────────────────────────────────────── */
 
 main {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas:
-    "fault"
-    "camera"
-    "drive"
-    "mow"
-    "log";
-  gap: 14px;
+  gap: 12px;
   width: 100%;
-  max-width: 640px;
+  max-width: 680px;
   margin: 0 auto;
-  /* Reserve the fixed STOP bar's height (+ safe area) so nothing hides under it. */
+  /* Reserve the tab bar + STOP bar (+ safe area) so nothing hides beneath. */
   padding: 12px max(14px, env(safe-area-inset-right))
-           calc(var(--stopbar-h) + env(safe-area-inset-bottom) + 16px)
+           calc(var(--tabbar-h) + var(--stopbar-h) + env(safe-area-inset-bottom) + 16px)
            max(14px, env(safe-area-inset-left));
 }
 main > * { min-width: 0; }   /* grid items must never force horizontal overflow */
 
-.fault-banner  { grid-area: fault; }
-#video-section { grid-area: camera; }
-#controls      { grid-area: drive; }
-#mow-panel     { grid-area: mow; }
-#log-drawer    { grid-area: log; }
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+.panel .hr { margin: 2px 0; }
 
-/* ── Fault banner ─────────────────────────────────────────────────────────── */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-height: 24px;
+}
+.panel-head h2, .panel-head h3 { margin: 0; }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+
+/* Phone shell: exactly one tab's panels are in the flow. */
+main > .panel { display: none; }
+body[data-tab="drive"]  main > .panel[data-tab="drive"],
+body[data-tab="mow"]    main > .panel[data-tab="mow"],
+body[data-tab="system"] main > .panel[data-tab="system"] { display: flex; }
+
+/* ── Fault banner (visible from every tab) ────────────────────────────────── */
 
 .fault-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
   padding: 10px 12px;
-  background: rgba(255,180,84,.08);
-  border: 1px solid rgba(255,180,84,.3);
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 34%, transparent);
   border-left: 3px solid var(--warn);
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   color: var(--warn);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 560;
   line-height: 1.4;
   overflow-wrap: anywhere;
   cursor: pointer;
-  /* Clamp long faults to two lines; tap (see app.js) or hover title for the rest. */
+}
+.fault-banner .ico { margin-top: 1px; }
+/* Clamp long faults to two lines; tap (see app.js) or the title for the rest. */
+#mower-error-text {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.fault-banner.expanded { -webkit-line-clamp: unset; display: block; }
-.fault-banner:empty { display: none; }
+.fault-banner.expanded #mower-error-text { display: block; -webkit-line-clamp: unset; }
 
 /* ── Camera card ──────────────────────────────────────────────────────────── */
-
-#video-section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
 
 #video-frame {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: #05080c;
+  background: var(--surface-3);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  border-radius: var(--r-sm);
   overflow: hidden;
+  transition: border-color var(--dur-2) var(--ease),
+              box-shadow var(--dur-2) var(--ease);
 }
-
 #video { position: absolute; inset: 0; }
 
-#cam-placeholder {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--text-dim);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: .3px;
-  pointer-events: none;
-}
-#video-frame.live #cam-placeholder,
-#video-frame.joining #cam-placeholder { display: none; }
-
+#cam-placeholder,
 #cam-spinner {
   position: absolute;
   inset: 0;
-  display: none;
+  display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  color: var(--text-dim);
-  font-size: 13px;
-  font-weight: 600;
+  gap: 10px;
+  color: var(--text-3);
+  font-size: 12.5px;
+  font-weight: 560;
+  letter-spacing: .02em;
   pointer-events: none;
 }
+#cam-spinner { display: none; }
+#cam-spinner .spinner { width: 22px; height: 22px; color: var(--accent-fg); }
+#video-frame.live #cam-placeholder,
+#video-frame.joining #cam-placeholder { display: none; }
 #video-frame.joining #cam-spinner { display: flex; }
 
-/* Live camera gets a subtle accent edge so "running" is visible at a glance. */
-#video-frame.live { border-color: rgba(45,212,122,.35); }
-
-.spinner {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 2.5px solid rgba(255,255,255,.15);
-  border-top-color: var(--accent);
-  animation: spin .8s linear infinite;
+/* A live feed marks its own frame — the one place the signal colour earns an
+   outline on this card — plus a badge on the frame, camera-app style.  Tinted
+   glass rather than a flat chip, so it stays legible over arbitrary video. */
+#video-frame.live {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
 }
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.camera-controls {
-  display: flex;
-  gap: 10px;
+#cam-live {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 5;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  border: 1px solid var(--border-strong);
+  color: var(--accent-fg);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  pointer-events: none;
 }
-.camera-controls .btn { flex: 1 1 0; min-width: 0; }
 
-/* ── Compass (overlaid top-right of the video) ───────────────────────────── */
+.btn-row { display: flex; gap: 10px; }
+.btn-row > .btn { flex: 1 1 0; min-width: 0; }
+/* Labels ellipsize instead of forcing the column (and the page) wider. */
+.btn > span:not(.btn-ico) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Compass (overlaid top-right of the video) ────────────────────────────── */
 
 .compass {
   position: absolute;
   top: 10px;
   right: 10px;
-  width: 84px;
-  height: 84px;
+  width: 82px;
+  height: 82px;
   border-radius: 50%;
-  background: rgba(4,8,12,.55);
-  border: 1px solid rgba(255,255,255,.3);
-  box-shadow: 0 1px 6px rgba(0,0,0,.5);
+  background: color-mix(in srgb, var(--surface) 68%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-1);
   pointer-events: none;
   z-index: 5;
-  color: #fff;
-  font: 600 12px/1 var(--font);
+  color: var(--text);
+  font: 600 11px/1 var(--font);
 }
-.compass[hidden] { display: none; }
 
 /* The ring carries the cardinal letters and rotates with the heading. */
 .compass-ring {
   position: absolute;
   inset: 0;
-  transition: transform 0.25s ease-out;
+  transition: transform .25s var(--ease);
   will-change: transform;
 }
-.cardinal { position: absolute; opacity: 0.9; }
-.cardinal-n { top: 5px; left: 50%; transform: translateX(-50%); color: var(--danger); }
-.cardinal-s { bottom: 5px; left: 50%; transform: translateX(-50%); }
-.cardinal-e { right: 6px; top: 50%; transform: translateY(-50%); }
-.cardinal-w { left: 6px; top: 50%; transform: translateY(-50%); }
+.cardinal { position: absolute; color: var(--text-2); }
+.cardinal-n { top: 6px;    left: 50%; transform: translateX(-50%); color: var(--danger); }
+.cardinal-s { bottom: 6px; left: 50%; transform: translateX(-50%); }
+.cardinal-e { right: 7px;  top: 50%;  transform: translateY(-50%); }
+.cardinal-w { left: 7px;   top: 50%;  transform: translateY(-50%); }
 
 /* Fixed forward-pointing arrow (does NOT rotate) — the camera's view direction. */
 .compass-arrow {
   position: absolute;
   left: 50%;
-  top: 7px;
+  top: 8px;
   transform: translateX(-50%);
   width: 0;
   height: 0;
-  border-left: 7px solid transparent;
-  border-right: 7px solid transparent;
-  border-bottom: 14px solid var(--info);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 13px solid var(--accent-fg);
 }
 
-/* Heading number in the middle. */
 .compass-readout {
   position: absolute;
   left: 0;
@@ -356,18 +346,11 @@ main > * { min-width: 0; }   /* grid items must never force horizontal overflow 
   transform: translateY(-50%);
   text-align: center;
   font-size: 15px;
-  letter-spacing: 0.5px;
-  text-shadow: 0 1px 2px rgba(0,0,0,.85);
-  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  letter-spacing: -.01em;
 }
 
 /* ── Joystick ─────────────────────────────────────────────────────────────── */
-
-#controls {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
 
 /* Non-flex block wrapper so nipplejs doesn't take its parentIsFlex branch. */
 #joystick-wrap { display: block; width: 100%; }
@@ -381,27 +364,30 @@ main > * { min-width: 0; }   /* grid items must never force horizontal overflow 
   position: relative;
   width: 100%;
   max-width: 480px;
-  height: clamp(240px, 36vh, 380px);
+  /* Sized against the Drive-tab budget: topbar + camera card + this + the
+     STOP/tab bars must fit a 844px phone without scrolling. */
+  height: clamp(200px, 30vh, 320px);
   margin: 0 auto;
-  border-radius: var(--radius);
+  border-radius: var(--r-sm);
   border: 1px solid var(--border);
-  background:
-    radial-gradient(circle at 50% 50%, rgba(45,212,122,.07), transparent 62%),
-    var(--surface);
-  box-shadow: var(--shadow);
-  transition: border-color .12s ease, box-shadow .12s ease;
+  background: var(--surface-2);
+  overflow: hidden;
   cursor: crosshair;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: border-color var(--dur-1) var(--ease),
+              box-shadow var(--dur-1) var(--ease),
+              background var(--dur-1) var(--ease);
 }
 
-/* Concentric guide rings + a small centre dot, purely decorative. */
+/* Concentric guide rings + a centre pip, purely decorative. */
 .joy-rings {
   position: absolute;
   inset: 0;
-  border-radius: inherit;
   background: repeating-radial-gradient(
     circle at 50% 50%,
-    transparent 0 33px,
-    rgba(255,255,255,.055) 33px 34px
+    transparent 0 32px,
+    var(--border) 32px 33px
   );
   pointer-events: none;
 }
@@ -414,27 +400,29 @@ main > * { min-width: 0; }   /* grid items must never force horizontal overflow 
   height: 6px;
   margin: -3px 0 0 -3px;
   border-radius: 50%;
-  background: rgba(255,255,255,.3);
+  background: var(--text-3);
 }
 
 .joy-hint {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 12px;
+  bottom: 14px;
   text-align: center;
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: .3px;
-  color: var(--text-dim);
-  opacity: .7;
+  font-weight: 560;
+  letter-spacing: .02em;
+  color: var(--text-3);
   pointer-events: none;
+  transition: opacity var(--dur-1) var(--ease);
 }
 
-/* Commands are streaming: glow the zone, swap the hint for a "Driving" chip. */
+/* Commands are streaming: light the zone, swap the hint for a DRIVING chip. */
 #joystick-zone.active {
-  border-color: rgba(45,212,122,.5);
-  box-shadow: 0 0 0 1px rgba(45,212,122,.25), 0 0 26px rgba(45,212,122,.14);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+              0 0 26px color-mix(in srgb, var(--accent) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-2));
 }
 #joystick-zone.active .joy-hint { opacity: 0; }
 
@@ -443,73 +431,20 @@ main > * { min-width: 0; }   /* grid items must never force horizontal overflow 
   top: 10px;
   left: 10px;
   display: none;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(45,212,122,.12);
-  border: 1px solid rgba(45,212,122,.4);
-  color: var(--accent);
-  font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: .5px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .06em;
   text-transform: uppercase;
   pointer-events: none;
 }
-#drive-indicator::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: pulse-green 1s ease-out infinite;
-}
 #joystick-zone.active #drive-indicator { display: inline-flex; }
 
-/* ── Buttons ──────────────────────────────────────────────────────────────── */
+/* nipplejs writes its colour inline at construction time; !important keeps the
+   stick on the accent token so it re-tints instantly when the theme flips. */
+#joystick-zone .nipple .back  { background: var(--accent) !important; opacity: .18 !important; }
+#joystick-zone .nipple .front { background: var(--accent) !important; opacity: .92 !important; }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 48px;
-  min-width: 0;
-  padding: 0 14px;
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font: 600 15px var(--font);
-  cursor: pointer;
-  transition: background .12s ease, border-color .12s ease, transform .12s ease, color .12s ease, filter .12s ease;
-}
-/* Labels ellipsize instead of forcing the column (and the page) wider. */
-.btn > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-@media (hover: hover) {
-  .btn:hover:not(:disabled) { background: #223047; }
-}
-.btn:active:not(:disabled) {
-  transform: translateY(1px) scale(.985);
-  background: #223047;
-  filter: brightness(1.12);
-}
-.btn:disabled { opacity: .4; cursor: not-allowed; }
-
-.btn.primary {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--accent-ink);
-}
-@media (hover: hover) {
-  .btn.primary:hover:not(:disabled) { background: var(--accent-press); }
-}
-.btn.primary:active:not(:disabled) { background: var(--accent-press); }
+/* ── Action grids ─────────────────────────────────────────────────────────── */
 
 .actions {
   display: grid;
@@ -519,284 +454,114 @@ main > * { min-width: 0; }   /* grid items must never force horizontal overflow 
 }
 .actions .span-2 { grid-column: 1 / -1; }
 
-/* ── Async-action feedback (busy spinner, success/fail flash) ─────────────── */
-
-/* While a POST is in flight: inline spinner replaces the icon, clicks are
-   ignored.  The STOP button is deliberately NOT pointer-locked — the pending
-   set in app.js already de-dupes it, and an emergency control must never be
-   uninteractive. */
-.btn.busy, .seg-btn.busy { pointer-events: none; }
-.busy { opacity: .9; }
-.busy .ico { display: none; }
-.btn.busy::before, .btn-stop.busy::before, .seg-btn.busy::before {
-  content: "";
-  width: 15px;
-  height: 15px;
-  flex: none;
-  border-radius: 50%;
-  border: 2px solid rgba(127,127,127,.35);
-  border-top-color: currentColor;
-  animation: spin .7s linear infinite;
-}
-
-/* Brief settle flash: green ring on success, red on failure (also toasted). */
-@keyframes flash-ok {
-  0%   { box-shadow: 0 0 0 3px rgba(45,212,122,.5); background-color: rgba(45,212,122,.22); border-color: rgba(45,212,122,.8); }
-  100% { box-shadow: 0 0 0 3px rgba(45,212,122,0); }
-}
-@keyframes flash-err {
-  0%, 55% { box-shadow: 0 0 0 3px rgba(255,93,93,.5); background-color: rgba(255,93,93,.2); border-color: rgba(255,93,93,.8); }
-  100%    { box-shadow: 0 0 0 3px rgba(255,93,93,0); }
-}
-.flash-ok  { animation: flash-ok .65s ease-out; }
-.flash-err { animation: flash-err .65s ease-out; }
-
-/* ── Toasts (self-made; bottom-centre, floated above the STOP bar) ────────── */
-
-#toast-region {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(var(--stopbar-h) + env(safe-area-inset-bottom) + 12px);
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  width: min(92vw, 420px);
-  pointer-events: none;
-}
-.toast {
-  max-width: 100%;
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  font: 600 13px var(--font);
-  box-shadow: var(--shadow);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  opacity: 0;
-  transform: translateY(8px);
-  transition: opacity .2s ease, transform .2s ease;
-}
-.toast.show { opacity: 1; transform: none; }
-.toast.ok  { border-color: rgba(45,212,122,.5); }
-.toast.err { border-color: rgba(255,93,93,.55); color: #ffc9c9; }
-
-/* ── Emergency STOP bar (fixed, can never scroll away) ────────────────────── */
-
-#stop-bar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 50;
-  display: flex;
-  justify-content: center;
-  padding: 10px max(14px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
-  background: linear-gradient(to top, rgba(11,15,20,.97), rgba(11,15,20,.88));
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border-top: 1px solid var(--border);
-}
-
-.btn-stop {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  width: 100%;
-  max-width: 480px;
-  min-height: 58px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--danger);
-  color: #fff;
-  font: 800 19px var(--font);
-  letter-spacing: 3px;
-  cursor: pointer;
-  box-shadow: 0 4px 18px rgba(255,93,93,.3);
-  transition: background .12s ease, transform .12s ease, box-shadow .12s ease;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.btn-stop .ico { width: 22px; height: 22px; }
-@media (hover: hover) {
-  .btn-stop:hover { background: #e64c4c; }
-}
-.btn-stop:active {
-  transform: translateY(1px) scale(.99);
-  background: #d84343;
-  box-shadow: 0 2px 10px rgba(255,93,93,.25);
-}
-
-/* ── Mowing panel (job control, blades, height/speed settings) ────────────── */
-
-#mow-panel {
-  width: 100%;
-  padding: 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.panel-title {
-  margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-
-/* Live blade telemetry chips row. */
-.mow-status {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.mow-status .chip {
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-}
-#blade-chip.blades-live {
-  background: rgba(45, 212, 122, 0.14);
-  border-color: var(--accent);
-  color: var(--accent);
-  animation: blades-pulse-soft 1.2s ease-in-out infinite;
-}
-@keyframes blades-pulse-soft {
-  50% { box-shadow: 0 0 0 4px rgba(45, 212, 122, 0.15); }
-}
-@media (prefers-reduced-motion: reduce) {
-  #blade-chip.blades-live { animation: none; }
-}
-
-/* Segmented control (blade-speed preset). */
-.segment {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  padding: 4px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-.seg-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 40px;
-  min-width: 0;
-  border: 0;
-  border-radius: calc(var(--radius-sm) - 4px);
-  background: transparent;
-  color: var(--text-dim);
-  font: 600 14px var(--font);
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
-}
-.seg-btn.active {
-  background: var(--accent);
-  color: var(--accent-ink);
-}
-.seg-btn:active { transform: scale(0.96); }
-
-/* Blades On arming state: second tap confirms.  Danger-tinted + pulse so the
-   armed button cannot be mistaken for a normal one. */
+/* Blades On arming state: the second tap confirms.  Danger-tinted and pulsing
+   so an armed button can never be mistaken for a normal one. */
 .btn-blades.armed {
   background: var(--danger);
-  border-color: var(--danger);
-  color: #fff;
-  animation: blades-pulse 0.9s ease-in-out infinite;
+  border-color: transparent;
+  color: var(--danger-ink);
+  animation: blades-arm .9s var(--ease) infinite;
 }
-@keyframes blades-pulse {
-  50% { box-shadow: 0 0 0 6px rgba(255, 93, 93, 0.25); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .btn-blades.armed { animation: none; }
+@keyframes blades-arm {
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--danger) 22%, transparent); }
 }
 
-.setting { margin-top: 14px; }
+/* ── Mowing panel ─────────────────────────────────────────────────────────── */
+
+/* Pulses only while the mower's own sensor says the disc is really spinning. */
+#blade-chip.blades-live {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent-fg);
+  animation: blades-live 1.4s var(--ease) infinite;
+}
+@keyframes blades-live {
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+}
+
+/* Segmented-control busy state (theme.css only covers .btn). */
+.segmented > button { position: relative; }
+.segmented > button[aria-busy="true"] { color: transparent; pointer-events: none; }
+.segmented > button[aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 15px;
+  height: 15px;
+  margin: -7.5px 0 0 -7.5px;
+  border-radius: 50%;
+  border: 2px solid var(--text-3);
+  border-top-color: transparent;
+  animation: spin .7s linear infinite;
+}
+.segmented > button:active { transform: scale(.96); }
+
+.setting { display: flex; flex-direction: column; gap: 2px; }
 .setting-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin-bottom: 6px;
-  font-size: 14px;
-  color: var(--text-dim);
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--text-2);
 }
-/* Mower-reported value under a slider (the slider itself is the command). */
+.setting-val { font-weight: 650; color: var(--accent-fg); }
+
+/* The mower's own reading, kept separate from the slider (the command input). */
 .setting-sub {
-  margin-top: 2px;
   min-height: 16px;
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-dim);
+  font-weight: 560;
+  color: var(--text-3);
 }
-.setting-sub.match     { color: var(--accent); }
+.setting-sub.match     { color: var(--accent-fg); }
 .setting-sub.differs   { color: var(--warn); }
 .setting-sub.adjusting { color: var(--info); }
 
-.setting-val {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: var(--accent);
-}
+/* theme.css rings the slider thumb in --bg; inside a card that reads as a hole.
+   Match the card instead.  Vendor pseudo-elements must stay in separate rules —
+   one unknown selector invalidates a whole list. */
+.panel input[type="range"]::-webkit-slider-thumb { border-color: var(--surface); }
+.panel input[type="range"]::-moz-range-thumb     { border-color: var(--surface); }
 
-/* Range sliders — token-styled, ≥44px effective touch target. */
-input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 44px;              /* touch target; the visible track is thinner */
+/* ── System panel ─────────────────────────────────────────────────────────── */
+
+.sys-list { margin: 0; display: flex; flex-direction: column; }
+.sys-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+}
+.sys-row:last-child { border-bottom: 0; }
+.sys-row dt { color: var(--text-3); flex: none; }
+.sys-row dd {
   margin: 0;
-  background: transparent;
-  touch-action: pan-y;       /* horizontal drags belong to the slider */
+  min-width: 0;
+  text-align: right;
+  color: var(--text);
+  font-weight: 560;
+  overflow-wrap: anywhere;
 }
-input[type="range"]::-webkit-slider-runnable-track {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-}
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 26px;
-  height: 26px;
-  margin-top: -11px;         /* centers the thumb on the 6px track */
-  border-radius: 50%;
-  background: var(--accent);
-  border: 3px solid var(--bg);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
-}
-input[type="range"]::-moz-range-track {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-}
-input[type="range"]::-moz-range-thumb {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 3px solid var(--bg);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+.sys-val.ok  { color: var(--accent-fg); }
+.sys-val.bad { color: var(--danger); }
+
+/* Warn-tinted nudge when auto-reconnect gave up and a manual press is needed.
+   The System tab button carries a matching badge (see .tab-badge). */
+#reconnect.attention {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
-/* ── Log drawer (collapsed by default; see app.js) ────────────────────────── */
+.sys-links { display: grid; gap: 10px; }
+.sys-links .btn { justify-content: flex-start; }
+
+/* ── Diagnostics drawer ───────────────────────────────────────────────────── */
 
 #log-toggle {
   display: flex;
@@ -804,116 +569,241 @@ input[type="range"]::-moz-range-thumb {
   gap: 8px;
   width: 100%;
   min-height: 44px;
-  padding: 0 12px;
+  padding: 0;
   background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-dim);
-  font: 600 13px var(--font);
-  cursor: pointer;
-  transition: color .12s ease, border-color .12s ease;
+  border: 0;
+  color: var(--text-3);
+  transition: color var(--dur-1) var(--ease);
 }
+#log-toggle .u-label { color: inherit; }
 @media (hover: hover) {
   #log-toggle:hover { color: var(--text); }
 }
-#log-toggle:active { transform: translateY(1px); }
-#log-toggle .caret { margin-left: auto; transition: transform .12s ease; }
+#log-toggle:active { transform: scale(.99); }
+#log-toggle .caret { margin-left: auto; transition: transform var(--dur-2) var(--ease); }
 #log-drawer.open #log-toggle .caret { transform: rotate(180deg); }
 
 #log {
   display: none;
-  margin: 8px 0 0;
+  margin: 0;
   padding: 10px 12px;
-  background: var(--surface);
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-dim);
-  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  max-height: 180px;
-  overflow-y: auto;      /* the drawer scrolls internally, never the page */
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font: 11px/1.5 var(--font-mono);
+  max-height: 190px;
+  overflow-y: auto;          /* the drawer scrolls internally, never the page */
+  overscroll-behavior: contain;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 #log-drawer.open #log { display: block; }
 
-/* ── Very narrow phones (≤360px): keep two columns without overflow ───────── */
+/* ── Tab bar (phone) ──────────────────────────────────────────────────────── */
+
+.tabbar button { position: relative; padding: 6px 4px 4px; }
+.tabbar button:active { transform: scale(.94); }
+@media (hover: hover) {
+  .tabbar button:hover { color: var(--text-2); }
+  .tabbar button[aria-selected="true"]:hover { color: var(--accent-fg); }
+}
+
+.tab-ico-wrap { position: relative; display: block; }
+.tab-badge {
+  position: absolute;
+  top: -1px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  border: 2px solid var(--bg);
+  box-sizing: content-box;
+}
+
+/* ── Emergency STOP (fixed above the tab bar; reachable from every tab) ───── */
+
+#stop-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  padding: 10px max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left));
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: saturate(1.6) blur(14px);
+  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  border-top: 1px solid var(--border);
+}
+
+.btn-stop {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 480px;
+  min-height: 56px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--danger);
+  color: var(--danger-ink);
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: .18em;
+  text-indent: .18em;             /* balance the tracking on the last glyph */
+  box-shadow: 0 2px 16px color-mix(in srgb, var(--danger) 30%, transparent);
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+  transition: filter var(--dur-1) var(--ease),
+              transform var(--dur-1) var(--ease),
+              box-shadow var(--dur-1) var(--ease);
+}
+.btn-stop .ico, .btn-stop .btn-ico { width: 22px; height: 22px; }
+@media (hover: hover) {
+  .btn-stop:hover { filter: brightness(1.07); }
+}
+.btn-stop:active {
+  transform: scale(.985);
+  filter: brightness(.94);
+  box-shadow: 0 1px 8px color-mix(in srgb, var(--danger) 24%, transparent);
+}
+.btn-stop:focus-visible { outline: 2px solid var(--danger); outline-offset: 3px; }
+
+/* An emergency control is NEVER pointer-locked by the busy system.  It still
+   shows the spinner (the icon slot hides), but it always accepts another
+   press; app.js's `pending` set alone de-dupes the POST.  It is deliberately
+   not a .btn, so theme.css's `.btn[aria-busy] { pointer-events: none }` can
+   never reach it — this re-assertion is belt and braces. */
+.btn-stop[aria-busy="true"] { pointer-events: auto; opacity: 1; }
+.btn-stop[aria-busy="true"] .btn-ico { visibility: hidden; }
+
+/* A danger-toned button flashing accent-green would read wrong, so STOP settles
+   with a brightness pulse instead of theme.css's flash-ok/flash-fail. */
+.btn-stop.flash-ok   { animation: stop-ok   600ms var(--ease); }
+.btn-stop.flash-fail { animation: stop-fail 600ms var(--ease); }
+@keyframes stop-ok   { 35% { filter: brightness(1.4); } }
+@keyframes stop-fail { 20%, 60% { opacity: .45; } }
+
+/* ── Toasts ───────────────────────────────────────────────────────────────── */
+
+#toast-region {
+  bottom: calc(var(--tabbar-h) + var(--stopbar-h) + env(safe-area-inset-bottom) + 12px);
+}
+.toast { display: inline-flex; align-items: center; gap: 8px; }
+.toast .ico { width: 16px; height: 16px; }
+.toast.out { animation: toast-out var(--dur-2) var(--ease) forwards; }
+@keyframes toast-out { to { opacity: 0; transform: translateY(6px) scale(.97); } }
+
+/* ── Very narrow phones (≤360px) ──────────────────────────────────────────── */
 
 @media (max-width: 360px) {
-  .btn { padding: 0 10px; font-size: 14px; gap: 6px; }
+  .btn { padding: 0 10px; gap: 6px; font-size: 13.5px; }
+  .actions { gap: 8px; }
+  #mower { flex-basis: 96px; }
+  .btn-stop { font-size: 17px; letter-spacing: .14em; text-indent: .14em; }
 }
 
-/* ── Portrait tablets / small laptops (640–899px): use the extra width ────── */
+/* ── Wide phones / portrait tablets (640px+) ──────────────────────────────── */
 
-@media (min-width: 640px) and (max-width: 899.98px) {
-  main { max-width: 760px; gap: 16px; }
-  /* Four-up action rows instead of a tall 2×N stack.  .span-2 keeps its
-     1 / -1 span, so the light toggle becomes a full-width row — fine. */
-  .actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (min-width: 640px) {
+  main { max-width: 760px; gap: 14px; }
+  /* basis 0, not auto: an `auto` basis is the chips' max-content width, which
+     is wide enough to force the whole group onto a second line.  With 0 they
+     take the leftover space and ellipsize inside it. */
+  .topbar-chips { flex: 1 1 0; margin-left: auto; justify-content: flex-end; }
+  #status { max-width: 340px; }
+  #mower-status { max-width: 160px; }
+  /* Wider rows instead of a tall 2×N stack.  auto-fit (not a fixed count) so a
+     two-button group fills its row rather than leaving dead tracks.  .span-2
+     keeps its 1 / -1 span, so the light toggle becomes a full-width row. */
+  .actions { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+  .sys-links { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* ── Tablet landscape / desktop (≥900px): true two-column grid ────────────── */
+/* ── Desktop / wide: no tabs, the whole dashboard at once ─────────────────── */
+/* Two branches so a landscape PHONE (coarse pointer, short viewport) never
+   falls in here and keeps the tabbed shell — a Pro Max is 932px across. */
 
-@media (min-width: 900px) {
-  #app-header {
+@media (min-width: 900px) and (min-height: 621px),
+       (min-width: 900px) and (pointer: fine) {
+  .tabbar { display: none; }
+
+  .topbar {
+    flex-wrap: nowrap;
     padding-left: max(20px, env(safe-area-inset-left));
     padding-right: max(20px, env(safe-area-inset-right));
   }
-  .chips { flex: 1 0 auto; justify-content: flex-end; margin-left: auto; }
-  #status.chip-status { max-width: 420px; }
+  #status { max-width: 420px; }
 
   main {
-    max-width: 1140px;
-    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    max-width: 1200px;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
     grid-template-areas:
       "fault  fault"
       "camera drive"
-      "mow    drive"
-      "mow    log";
+      "system mow"
+      "diag   diag";
     align-items: start;
-    gap: 18px 22px;
+    gap: 18px 20px;
     padding-top: 18px;
+    padding-bottom: calc(var(--stopbar-h) + env(safe-area-inset-bottom) + 20px);
   }
+  main > .panel { display: flex; }        /* every tab visible at once */
+  #mower-error  { grid-area: fault; }
+  #panel-camera { grid-area: camera; }
+  #panel-drive  { grid-area: drive; }
+  #panel-system { grid-area: system; }
+  #panel-mow    { grid-area: mow; }
+  #panel-diag   { grid-area: diag; }
 
-  #joystick-zone { height: 340px; max-width: none; }
-  .btn-stop { max-width: 560px; }
+  .panel { padding: 16px; }
+  #joystick-zone { height: 320px; max-width: none; }
   #log { max-height: 260px; }
+
+  #stop-bar { bottom: 0; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .btn-stop { max-width: 560px; }
+  #toast-region { bottom: calc(var(--stopbar-h) + env(safe-area-inset-bottom) + 12px); }
 }
 
-/* ── Phone landscape (coarse pointer, short viewport): drive-by-camera ────── */
-/* Placed last so it wins over the ≥900px block on wide landscape phones
-   (e.g. iPhone Pro Max at 932px).  iPads (landscape height ≥ 744px) keep the
-   desktop layout above. */
+/* ── Phone landscape: drive while watching ────────────────────────────────── */
+/* Excluded from the desktop query above, so this only tunes the tabbed shell:
+   fixed-bar offsets, main padding and panel visibility all stay as declared at
+   the top of this sheet. */
 
 @media (orientation: landscape) and (pointer: coarse) and (max-height: 620px) {
-  #app-header { padding-top: calc(6px + env(safe-area-inset-top)); padding-bottom: 6px; }
-  .chips { flex: 0 1 auto; margin-left: auto; }
-
-  main {
-    max-width: none;
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);   /* camera ~55% */
-    grid-template-areas:
-      "fault  fault"
-      "camera drive"
-      "mow    mow"
-      "log    log";
-    align-items: start;
-    gap: 12px;
+  .topbar {
+    flex-wrap: nowrap;
+    min-height: 46px;
+    padding-bottom: 4px;
   }
+  .topbar-chips { flex: 1 1 0; margin-left: auto; justify-content: flex-end; min-width: 0; }
+  #status { max-width: 38vw; }
 
-  #joystick-zone { height: clamp(180px, 52vh, 300px); max-width: none; }
+  main { max-width: none; gap: 10px; padding-top: 10px; }
 
-  /* Drive column is narrow: back to 2-up.  The full-width mowing panel can
-     afford 4-up (the ID selector outranks the class rule above). */
-  .actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  #mow-panel .actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  /* Drive tab: camera left, joystick + actions right.  System tab: detail and
+     log side by side.  Mow stays full width — it is a dense single column. */
+  body[data-tab="drive"]  main { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+  body[data-tab="system"] main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  #mower-error { grid-column: 1 / -1; }
 
-  /* Keep the STOP over the joystick column only, leaving the camera clear. */
+  .panel { padding: 12px; gap: 10px; }
+  #joystick-zone { height: clamp(150px, 40vh, 260px); max-width: none; }
+  #panel-drive .actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #log { max-height: 140px; }
+
+  /* Keep STOP over the right-hand column so the camera stays clear. */
   #stop-bar {
     left: auto;
-    right: 0;
-    width: min(46vw, 430px);
-    border-top-left-radius: var(--radius);
+    width: min(48vw, 430px);
     border-left: 1px solid var(--border);
+    border-top-left-radius: var(--r-md);
   }
-  .btn-stop { min-height: 52px; }
+  .btn-stop { min-height: 50px; font-size: 17px; }
 }

@@ -519,59 +519,263 @@ def _is_onboarded() -> bool:
 
 
 def _login_html(error: bool = False) -> str:
-    """Standalone (inline-styled, no /static deps) sign-in page.  A real <form>
-    so Chrome / iOS password managers offer to save and later autofill it."""
-    err = '<p class="err">Wrong username or password.</p>' if error else ""
+    """Standalone sign-in page.  A real <form> so Chrome / iOS password managers
+    offer to save and later autofill it.
+
+    Fully self-contained on purpose: BasicAuthMiddleware exempts exactly one
+    path (`/login`), so the /static mount — theme.css, theme.js, the icons — is
+    401-gated before a session exists and CANNOT be linked from here.  The
+    design-system tokens below are therefore an inlined subset of
+    static/theme.css, and the theme boot is an inlined subset of
+    static/theme.js (same `luba-theme` localStorage key, same
+    system/light/dark semantics, so the choice carries into the app).  If you
+    change a token in theme.css, mirror it here.
+    """
+    err = (
+        '<p class="err" role="alert">'
+        '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" '
+        'stroke-linecap="round" aria-hidden="true">'
+        '<circle cx="8" cy="8" r="6.4"/><path d="M8 4.8v3.7"/><path d="M8 11.2h.01"/>'
+        "</svg>Wrong username or password.</p>"
+    ) if error else ""
     user = _WEB_USER or ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F6F6F4">
 <title>Luba Remote — Sign in</title>
+<script>
+/* Inlined subset of static/theme.js — /static is auth-gated pre-session.
+   Runs synchronously in <head> so the theme attribute is set before paint. */
+(function () {{
+  var KEY = "luba-theme", root = document.documentElement;
+  function stored() {{
+    try {{ return localStorage.getItem(KEY) || "system"; }} catch (e) {{ return "system"; }}
+  }}
+  /* Keep iOS's status bar / Android's address bar in step with the surface.
+     Read the token back rather than duplicating hex values here. */
+  function syncMeta() {{
+    var bg = getComputedStyle(root).getPropertyValue("--bg").trim();
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta && bg) meta.setAttribute("content", bg);
+  }}
+  function apply(mode) {{
+    if (mode === "system") root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", mode);
+    syncMeta();
+  }}
+  apply(stored());
+  document.addEventListener("DOMContentLoaded", function () {{
+    syncMeta();                                    /* styles exist by now */
+    var b = document.getElementById("theme");
+    if (!b) return;
+    b.addEventListener("click", function () {{
+      var next = {{ system: "light", light: "dark", dark: "system" }}[stored()] || "system";
+      try {{ localStorage.setItem(KEY, next); }} catch (e) {{ /* private mode */ }}
+      apply(next);
+      b.setAttribute("aria-label", "Theme: " + next + ". Change theme.");
+    }});
+  }});
+  if (window.matchMedia) {{
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    var on = function () {{ if (stored() === "system") syncMeta(); }};
+    if (mq.addEventListener) mq.addEventListener("change", on);
+    else if (mq.addListener) mq.addListener(on);
+  }}
+}})();
+</script>
 <style>
-  :root {{ --bg:#0b0f14; --surface:#121924; --surface-2:#1a2432;
-           --border:rgba(255,255,255,.07); --text:#e8eef5; --text-dim:#8fa0b3;
-           --accent:#2dd47a; --accent-press:#24b968; --accent-ink:#04371c;
-           --danger:#ff5d5d; --radius:14px; --radius-sm:10px;
-           --shadow:0 8px 28px rgba(0,0,0,.45);
-           --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }}
-  body {{ margin:0; min-height:100vh; display:flex; align-items:center;
-         justify-content:center; color:var(--text); font-family:var(--font);
-         background:radial-gradient(circle at 50% -20%, #131c29, var(--bg) 60%) var(--bg);
-         padding:16px; box-sizing:border-box; }}
-  form {{ background:var(--surface); padding:32px 28px;
-          border:1px solid var(--border); border-radius:var(--radius);
-          width:min(90vw,340px); box-shadow:var(--shadow); }}
-  h1 {{ margin:0 0 20px; font-size:20px; font-weight:700; letter-spacing:.2px; }}
-  label {{ display:block; font-size:12px; font-weight:600; letter-spacing:.3px;
-           color:var(--text-dim); margin:14px 0 6px; }}
-  input {{ width:100%; box-sizing:border-box; padding:12px; font-size:16px;
-           border:1px solid var(--border); border-radius:var(--radius-sm);
-           background:var(--surface-2); color:var(--text); outline:none;
-           transition:border-color .12s ease; }}
-  input:focus {{ border-color:rgba(45,212,122,.5); }}
-  button {{ width:100%; margin-top:22px; padding:13px; font-size:16px; border:0;
-            border-radius:var(--radius-sm); background:var(--accent);
-            color:var(--accent-ink); font-weight:700; cursor:pointer;
-            transition:background .12s ease; }}
-  button:hover {{ background:var(--accent-press); }}
-  button:active {{ background:var(--accent-press); }}
-  .err {{ color:var(--danger); font-size:13px; font-weight:600; margin:0 0 10px; }}
+  /* ── Tokens: inlined subset of static/theme.css ─────────────────────────── */
+  :root {{
+    color-scheme: light;
+    --bg:#F6F6F4; --surface:#FFFFFF; --surface-2:#F0F0ED;
+    --border:rgba(0,0,0,.10); --border-strong:rgba(0,0,0,.18);
+    --text:#17171A; --text-2:#5C5C66; --text-3:#8A8A94;
+    --accent:#A9E23A; --accent-ink:#16210A; --accent-fg:#4C7A00;
+    --accent-soft:rgba(124,179,0,.12);
+    --danger:#D92D20; --danger-soft:rgba(217,45,32,.10);
+    --r-sm:10px; --r-lg:20px;
+    --ease:cubic-bezier(.32,.72,0,1); --dur-1:140ms;
+    --font:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+           "Helvetica Neue",Arial,sans-serif;
+  }}
+  @media (prefers-color-scheme: dark) {{
+    :root:not([data-theme="light"]) {{
+      color-scheme: dark;
+      --bg:#0B0B0C; --surface:#141416; --surface-2:#1C1C1F;
+      --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.16);
+      --text:#EDEDEF; --text-2:#9C9CA4; --text-3:#6E6E76;
+      --accent:#C9F24D; --accent-ink:#131A05; --accent-fg:#C9F24D;
+      --accent-soft:rgba(201,242,77,.13);
+      --danger:#FF5A5F; --danger-soft:rgba(255,90,95,.14);
+    }}
+  }}
+  :root[data-theme="dark"] {{
+    color-scheme: dark;
+    --bg:#0B0B0C; --surface:#141416; --surface-2:#1C1C1F;
+    --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.16);
+    --text:#EDEDEF; --text-2:#9C9CA4; --text-3:#6E6E76;
+    --accent:#C9F24D; --accent-ink:#131A05; --accent-fg:#C9F24D;
+    --accent-soft:rgba(201,242,77,.13);
+    --danger:#FF5A5F; --danger-soft:rgba(255,90,95,.14);
+  }}
+
+  /* ── Base ───────────────────────────────────────────────────────────────── */
+  *, *::before, *::after {{ box-sizing:border-box; }}
+  html {{ -webkit-text-size-adjust:100%; }}
+  body {{
+    margin:0;
+    /* min-height (not height) so the flex box grows past the viewport on very
+       short screens instead of clipping the card's top edge. */
+    min-height:100vh; min-height:100svh;
+    display:flex; align-items:center; justify-content:center;
+    padding:max(22px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+            max(22px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+    background:var(--bg); color:var(--text);
+    font-family:var(--font); font-size:15px; line-height:1.5;
+    font-variant-numeric:tabular-nums;
+    -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+  }}
+  button, input {{ font:inherit; color:inherit; }}
+  button {{ cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }}
+  :focus-visible {{ outline:2px solid var(--accent-fg); outline-offset:2px; border-radius:4px; }}
+  ::selection {{ background:var(--accent-soft); }}
+
+  /* ── Card ───────────────────────────────────────────────────────────────── */
+  /* Flat surface + hairline border — no shadow: this is a static card, not an
+     overlay (see docs/design-system.md). */
+  .wrap {{ width:100%; max-width:378px; }}
+  .card {{
+    width:100%;
+    padding:28px 24px 26px;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:var(--r-lg);
+  }}
+  .brand {{ display:flex; flex-direction:column; align-items:center; text-align:center; }}
+  .mark {{ display:block; width:58px; height:58px; }}
+  h1 {{ margin:14px 0 0; font-size:21px; font-weight:650; letter-spacing:-0.02em; }}
+  .sub {{ margin:5px 0 0; font-size:13.5px; color:var(--text-2); }}
+
+  /* ── Error ──────────────────────────────────────────────────────────────── */
+  .err {{
+    display:flex; align-items:flex-start; gap:8px;
+    margin:22px 0 -4px; padding:10px 12px;
+    background:var(--danger-soft); border-radius:var(--r-sm);
+    color:var(--danger); font-size:13.5px; font-weight:560;
+  }}
+  .err svg {{ flex:none; width:16px; height:16px; margin-top:2px; }}
+
+  /* ── Fields ─────────────────────────────────────────────────────────────── */
+  label {{
+    display:block; margin:18px 0 7px;
+    font-size:12.5px; font-weight:600; color:var(--text-2);
+  }}
+  .field {{
+    width:100%; min-height:48px; padding:0 13px;
+    font-size:16px;                       /* <16px makes iOS zoom on focus */
+    background:var(--surface-2); border:1px solid var(--border);
+    border-radius:var(--r-sm); color:var(--text); outline:none;
+    transition:border-color var(--dur-1) var(--ease);
+  }}
+  .field:focus {{ border-color:var(--accent-fg); }}
+  /* Password managers fill these constantly — stop Chrome painting its own
+     opaque blue/yellow over a themed surface. */
+  .field:-webkit-autofill,
+  .field:-webkit-autofill:hover,
+  .field:-webkit-autofill:focus {{
+    -webkit-text-fill-color:var(--text);
+    -webkit-box-shadow:0 0 0 1000px var(--surface-2) inset;
+    caret-color:var(--text);
+  }}
+
+  .btn {{
+    display:flex; align-items:center; justify-content:center;
+    width:100%; min-height:48px; margin-top:24px;
+    font-size:15px; font-weight:600;
+    background:var(--accent); color:var(--accent-ink);
+    border:1px solid transparent; border-radius:var(--r-sm);
+    transition:filter var(--dur-1) var(--ease), transform var(--dur-1) var(--ease);
+  }}
+  .btn:hover {{ filter:brightness(1.05); }}
+  .btn:active {{ transform:scale(.985); }}
+
+  .foot {{ margin:20px 0 0; text-align:center; font-size:12px; color:var(--text-3); }}
+
+  /* ── Theme switch ───────────────────────────────────────────────────────── */
+  .theme {{
+    position:fixed;
+    top:max(8px, env(safe-area-inset-top));
+    right:max(8px, env(safe-area-inset-right));
+    display:inline-flex; align-items:center; justify-content:center;
+    width:44px; height:44px;                /* touch target floor */
+    background:transparent; border:1px solid transparent;
+    border-radius:var(--r-sm); color:var(--text-3);
+    transition:color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+  }}
+  .theme:hover {{ color:var(--text); background:var(--surface-2); }}
+  .theme svg {{ width:19px; height:19px; }}
+  .theme .i {{ display:none; }}
+  :root:not([data-theme]) .theme .i-system {{ display:block; }}
+  :root[data-theme="light"] .theme .i-light {{ display:block; }}
+  :root[data-theme="dark"]  .theme .i-dark  {{ display:block; }}
+
+  @media (prefers-reduced-motion: reduce) {{
+    *, *::before, *::after {{
+      animation-duration:.01ms !important;
+      transition-duration:.01ms !important;
+    }}
+  }}
 </style>
 </head>
 <body>
-<form method="post" action="/login" autocomplete="on">
-  <h1>Luba Remote</h1>
+
+<button id="theme" class="theme" type="button" aria-label="Change theme">
+  <svg class="i i-system" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="1.7" aria-hidden="true">
+    <circle cx="12" cy="12" r="8.2"/>
+    <path d="M12 3.8a8.2 8.2 0 0 1 0 16.4z" fill="currentColor" stroke="none"/>
+  </svg>
+  <svg class="i i-light" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="4.2"/>
+    <path d="M12 2.6v2.3M12 19.1v2.3M4.4 4.4l1.6 1.6M18 18l1.6 1.6"/>
+    <path d="M2.6 12h2.3M19.1 12h2.3M4.4 19.6 6 18M18 6l1.6-1.6"/>
+  </svg>
+  <svg class="i i-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+    <path d="M20.2 14.4A8.5 8.5 0 0 1 9.6 3.8a8.5 8.5 0 1 0 10.6 10.6z"/>
+  </svg>
+</button>
+
+<main class="wrap">
+<form class="card" method="post" action="/login" autocomplete="on">
+  <div class="brand">
+    <!-- The app mark, inline (static/icon.svg is 401-gated pre-session): a mown
+         swath, its headland turn, and the machine at the head of the next pass. -->
+    <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+      <rect width="64" height="64" rx="15" fill="#0B0B0C"/>
+      <path d="M18.2 46.7V29.1a11.8 11.8 0 0 1 23.6 0v5.9"
+            fill="none" stroke="#C9F24D" stroke-width="8.3" stroke-linecap="round"/>
+      <rect x="34.8" y="33" width="13.7" height="13.7" rx="4.4"
+            fill="#C9F24D" stroke="#0B0B0C" stroke-width="2.9"/>
+    </svg>
+    <h1>Luba Remote</h1>
+    <p class="sub">Sign in to control your mower.</p>
+  </div>
   {err}
   <label for="u">Username</label>
-  <input id="u" name="username" value="{user}" autocomplete="username"
+  <input id="u" class="field" name="username" value="{user}" autocomplete="username"
          autocapitalize="none" autocorrect="off" spellcheck="false" required>
   <label for="p">Password</label>
-  <input id="p" name="password" type="password" autocomplete="current-password"
+  <input id="p" class="field" name="password" type="password" autocomplete="current-password"
          required>
-  <button type="submit">Sign in</button>
+  <button class="btn" type="submit">Sign in</button>
 </form>
+<p class="foot">Local network access only.</p>
+</main>
 </body>
 </html>"""
 

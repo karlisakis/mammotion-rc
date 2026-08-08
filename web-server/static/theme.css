@@ -1,0 +1,537 @@
+/* ============================================================================
+   Luba Remote — design system
+   ============================================================================
+
+   Direction: "Instrument". A precision control surface, not a dashboard
+   template. Near-neutral graphite (deliberately NOT blue-slate), hairline
+   borders, flat surfaces, and a single machine-lime signal colour used only
+   where something is live, primary, or focused. Shadows appear on genuine
+   overlays only. Numbers are tabular everywhere — telemetry must not jitter.
+
+   Light and dark are both first-class: tokens are defined for light on
+   :root, overridden for dark under prefers-color-scheme, and both are
+   forced-overridable via [data-theme="light"|"dark"] so the in-app toggle
+   wins over the OS. Always set `color-scheme` so form controls, scrollbars
+   and the browser's own chrome follow.
+
+   Accent needs three tokens, not one:
+     --accent      fill colour (buttons, active states)
+     --accent-ink  text/icon ON that fill
+     --accent-fg   accent used as text/icon on a page background — a lime
+                   that reads well on near-black is unreadable on white, so
+                   light mode darkens this one only.
+
+   Consumers: index.html/style.css, onboarding.html, diag.html, and the login
+   page. Page-specific rules belong in those files; never edit this one to fix
+   a single page.
+   ========================================================================= */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces — warm-neutral paper, not blue */
+  --bg: #F6F6F4;
+  --surface: #FFFFFF;
+  --surface-2: #F0F0ED;
+  --surface-3: #E7E7E3;
+  --border: rgba(0, 0, 0, .10);
+  --border-strong: rgba(0, 0, 0, .18);
+
+  /* Text */
+  --text: #17171A;
+  --text-2: #5C5C66;
+  --text-3: #8A8A94;
+
+  /* Signal */
+  --accent: #A9E23A;
+  --accent-ink: #16210A;
+  --accent-fg: #4C7A00;
+  --accent-soft: rgba(124, 179, 0, .12);
+
+  --danger: #D92D20;
+  --danger-ink: #FFFFFF;
+  --danger-soft: rgba(217, 45, 32, .10);
+  --warn: #B25E02;
+  --warn-soft: rgba(178, 94, 2, .10);
+  --info: #175CD3;
+  --info-soft: rgba(23, 92, 211, .10);
+
+  /* Radii */
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-full: 999px;
+
+  /* Elevation — overlays only */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .06), 0 1px 1px rgba(0, 0, 0, .04);
+  --shadow-2: 0 12px 32px rgba(0, 0, 0, .14), 0 2px 8px rgba(0, 0, 0, .08);
+
+  /* Motion — an iOS-ish decelerate curve */
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --dur-1: 140ms;
+  --dur-2: 220ms;
+
+  --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Chrome heights — pages reserve these so nothing hides under fixed bars */
+  --topbar-h: 52px;
+  --tabbar-h: 58px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg: #0B0B0C;
+    --surface: #141416;
+    --surface-2: #1C1C1F;
+    --surface-3: #26262A;
+    --border: rgba(255, 255, 255, .09);
+    --border-strong: rgba(255, 255, 255, .16);
+
+    --text: #EDEDEF;
+    --text-2: #9C9CA4;
+    --text-3: #6E6E76;
+
+    --accent: #C9F24D;
+    --accent-ink: #131A05;
+    --accent-fg: #C9F24D;
+    --accent-soft: rgba(201, 242, 77, .13);
+
+    --danger: #FF5A5F;
+    --danger-ink: #2B0709;
+    --danger-soft: rgba(255, 90, 95, .14);
+    --warn: #FFB020;
+    --warn-soft: rgba(255, 176, 32, .13);
+    --info: #5AA9FF;
+    --info-soft: rgba(90, 169, 255, .13);
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+    --shadow-2: 0 16px 40px rgba(0, 0, 0, .55), 0 2px 10px rgba(0, 0, 0, .4);
+  }
+}
+
+/* Manual override — identical block, driven by the in-app toggle. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0B0B0C;
+  --surface: #141416;
+  --surface-2: #1C1C1F;
+  --surface-3: #26262A;
+  --border: rgba(255, 255, 255, .09);
+  --border-strong: rgba(255, 255, 255, .16);
+
+  --text: #EDEDEF;
+  --text-2: #9C9CA4;
+  --text-3: #6E6E76;
+
+  --accent: #C9F24D;
+  --accent-ink: #131A05;
+  --accent-fg: #C9F24D;
+  --accent-soft: rgba(201, 242, 77, .13);
+
+  --danger: #FF5A5F;
+  --danger-ink: #2B0709;
+  --danger-soft: rgba(255, 90, 95, .14);
+  --warn: #FFB020;
+  --warn-soft: rgba(255, 176, 32, .13);
+  --info: #5AA9FF;
+  --info-soft: rgba(90, 169, 255, .13);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-2: 0 16px 40px rgba(0, 0, 0, .55), 0 2px 10px rgba(0, 0, 0, .4);
+}
+
+/* ── Base ────────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: none;   /* no pull-to-refresh mid-drive */
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Paint-clip only. NEVER use overflow-x:hidden on html/body together — it
+     forces overflow-y to `auto`, creating nested scroll containers that
+     freeze touch scrolling on iOS. `clip` never creates a scroll container. */
+  overflow-x: clip;
+}
+
+/* Telemetry must not reflow as digits change. */
+body { font-variant-numeric: tabular-nums; }
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+
+/* Controls are not prose — a long-press should not start a text selection. */
+button, select, a, .chip, .u-label, .tabbar, .topbar {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Kill the 300ms double-tap-zoom delay without disabling panning. */
+button, select, a, input, .chip { touch-action: manipulation; }
+
+:focus-visible {
+  outline: 2px solid var(--accent-fg);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection { background: var(--accent-soft); }
+
+/* ── Typography ──────────────────────────────────────────────────────────── */
+
+h1, h2, h3 {
+  margin: 0;
+  font-weight: 650;
+  letter-spacing: -0.02em;   /* tightened — reads considered, not default */
+}
+h1 { font-size: 22px; }
+h2 { font-size: 17px; }
+h3 { font-size: 15px; }
+
+/* Instrument-panel micro-label. Use sparingly — section headers only. */
+.u-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.u-dim  { color: var(--text-2); }
+.u-mono { font-family: var(--font-mono); }
+
+/* ── Surfaces ────────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.card-pad { padding: 14px; }
+
+/* Hairline divider that respects the token, not a hardcoded grey. */
+.hr {
+  height: 1px;
+  background: var(--border);
+  border: 0;
+  margin: 12px 0;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;              /* touch target floor */
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 560;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  transition: background var(--dur-1) var(--ease),
+              border-color var(--dur-1) var(--ease),
+              transform var(--dur-1) var(--ease),
+              opacity var(--dur-1) var(--ease);
+}
+.btn:hover:not(:disabled) { border-color: var(--border-strong); }
+.btn:active:not(:disabled) { transform: scale(.975); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.05); }
+
+.btn-danger {
+  background: var(--danger);
+  border-color: transparent;
+  color: var(--danger-ink);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+
+.btn-icon { width: 44px; padding: 0; }
+
+/* Busy state: the label stays, the icon slot becomes a spinner. Set
+   aria-busy="true" alongside so it is announced, not just seen. */
+.btn[aria-busy="true"] { pointer-events: none; opacity: .7; }
+.btn[aria-busy="true"] .btn-ico { visibility: hidden; }
+.btn[aria-busy="true"]::before {
+  content: "";
+  position: absolute;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: spin .7s linear infinite;
+}
+.btn { position: relative; }
+
+/* Result flashes — applied for ~600ms after an action settles. */
+.btn.flash-ok   { animation: flash-ok var(--dur-2) var(--ease); }
+.btn.flash-fail { animation: flash-fail var(--dur-2) var(--ease); }
+@keyframes flash-ok   { 50% { background: var(--accent-soft); border-color: var(--accent); } }
+@keyframes flash-fail { 50% { background: var(--danger-soft); border-color: var(--danger); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Chips ───────────────────────────────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  font-weight: 560;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.chip:empty { display: none; }
+.chip-accent { background: var(--accent-soft); border-color: transparent; color: var(--accent-fg); }
+.chip-danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+.chip-warn   { background: var(--warn-soft);   border-color: transparent; color: var(--warn); }
+.chip-info   { background: var(--info-soft);   border-color: transparent; color: var(--info); }
+
+/* Status dot — pair with a tone class for colour. */
+.dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.dot-pulse { animation: dot-pulse 2s var(--ease) infinite; }
+@keyframes dot-pulse {
+  0%       { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  70%,100% { box-shadow: 0 0 0 6px transparent; opacity: .85; }
+}
+
+/* ── Form controls ───────────────────────────────────────────────────────── */
+
+.field {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 12px;
+  font-size: 16px;              /* ≥16px or iOS zooms the page on focus */
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  transition: border-color var(--dur-1) var(--ease);
+}
+.field:focus { border-color: var(--accent-fg); outline: none; }
+.field::placeholder { color: var(--text-3); }
+
+select.field {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%238A8A94' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+
+/* Range: a 44px-tall hit area over a thin visible track. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  touch-action: pan-y;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px; background: var(--surface-3);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 24px; height: 24px; margin-top: -10px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid var(--bg);
+  box-shadow: var(--shadow-1);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px; border-radius: 2px; background: var(--surface-3);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid var(--bg);
+}
+
+/* Segmented control — iOS-style, for 2–4 exclusive options. */
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.segmented > button {
+  min-height: 38px;
+  border: 0;
+  border-radius: calc(var(--r-sm) - 3px);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13.5px;
+  font-weight: 560;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.segmented > button[aria-pressed="true"],
+.segmented > button.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* ── App chrome ──────────────────────────────────────────────────────────── */
+
+/* Fixed top bar. Translucent so content scrolling under it reads as depth —
+   the one place blur is justified. */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--topbar-h);
+  padding: 0 max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
+  padding-top: env(safe-area-inset-top);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(1.6) blur(14px);
+  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Fixed bottom tab bar (phone). Hidden on wide screens where the full
+   dashboard is visible at once. */
+.tabbar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 40;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  min-height: var(--tabbar-h);
+  padding-bottom: env(safe-area-inset-bottom);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.6) blur(14px);
+  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  border-top: 1px solid var(--border);
+}
+.tabbar button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 560;
+  letter-spacing: .01em;
+  transition: color var(--dur-1) var(--ease);
+}
+.tabbar button[aria-selected="true"] { color: var(--accent-fg); }
+
+/* ── Overlays ────────────────────────────────────────────────────────────── */
+
+.toast-region {
+  position: fixed;
+  left: 0; right: 0;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  padding: 0 16px;
+}
+.toast {
+  max-width: min(92vw, 420px);
+  padding: 10px 14px;
+  border-radius: var(--r-full);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+  font-size: 13.5px;
+  font-weight: 560;
+  animation: toast-in var(--dur-2) var(--ease);
+}
+.toast-ok   { color: var(--accent-fg); }
+.toast-fail { color: var(--danger); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px) scale(.97); } }
+
+.spinner {
+  display: inline-block;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: spin .7s linear infinite;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2));
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: var(--r-sm);
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* ── Accessibility ───────────────────────────────────────────────────────── */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

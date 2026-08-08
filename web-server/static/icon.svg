@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512"
+     role="img" aria-label="Luba Remote">
+  <title>Luba Remote</title>
+  <rect width="64" height="64" fill="#0B0B0C"/>
+  <!-- the swath and its headland turn -->
+  <path d="M18.2 46.7V29.1a11.8 11.8 0 0 1 23.6 0v5.9"
+        fill="none" stroke="#C9F24D" stroke-width="8.3" stroke-linecap="round"/>
+  <!-- the machine, at the head of the next pass -->
+  <rect x="34.8" y="33" width="13.7" height="13.7" rx="4.4"
+        fill="#C9F24D" stroke="#0B0B0C" stroke-width="2.9"/>
+</svg>
