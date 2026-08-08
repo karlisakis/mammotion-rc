@@ -81,6 +81,34 @@ DEAD_ZONE = 0.15
 MAX_LINEAR  = 1.0
 MAX_ANGULAR = 1.0
 
+# Top of the command scale a fully-deflected stick asks for, 0-100.
+#
+# pymammotion's get_percent() implements the app's dead zone by subtracting 15
+# from the raw percentage, so feeding it a full stick (100) yields 85 — i.e.
+# full deflection only ever commanded 85% of the mower's range, with the dead
+# zone eating the top end as well as the bottom.  We instead rescale
+# [DEAD_ZONE..1.0] onto [0..JOYSTICK_TOP_PERCENT], which keeps the dead zone
+# and reaches the top of the scale.  100 gives roughly 18% more top speed than
+# the old behaviour; set LUBA_JOYSTICK_TOP_PERCENT=85 to restore stock feel.
+#
+# This raises the speed the mower is *asked* for; the mower still applies its
+# own limits (notably a lower cap while the blades are running).
+JOYSTICK_TOP_PERCENT = float(os.environ.get("LUBA_JOYSTICK_TOP_PERCENT", "100"))
+
+
+def _stick_percent(magnitude: float, ceiling: float) -> float:
+    """Map a stick magnitude to the 0-100 percentage transform_both_speeds wants.
+
+    Linear from the dead zone to the ceiling, so a full stick reaches
+    JOYSTICK_TOP_PERCENT instead of being clipped at 85 by get_percent()'s
+    flat -15 offset.  Returns 0.0 inside the dead zone (= stop).
+    """
+    m = min(magnitude, ceiling)
+    if m <= DEAD_ZONE:
+        return 0.0
+    span = max(ceiling - DEAD_ZONE, 1e-6)
+    return ((m - DEAD_ZONE) / span) * JOYSTICK_TOP_PERCENT
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 class State:
     handles:    dict[str, DeviceHandle] = {}
@@ -708,21 +736,42 @@ async def post_action(name: str, action: str):
     return {"ok": True}
 
 
-def _device_limits(h) -> "dict | None":
-    """Per-model operating limits (blade height mm, working speed m/s) from
-    pymammotion's device-config table, or None before the mower has reported
-    its model info.  Used to bound the settings endpoint and to scale the UI
-    sliders to what this specific mower supports."""
+# Family fallback used when pymammotion has no entry for this exact model.
+# Its get_best_default() keys off product_key alone, so an unlisted Luba product
+# key (e.g. HM442's uY54W5rM8YH) silently lands on the *Yuka* config — whose
+# working_speed caps at 0.6 m/s and whose blade_height is 0/0.  That is how a
+# Luba ends up with a 0.6 m/s ceiling it does not actually have: pymammotion's
+# own default_luba_config allows 0.2-1.2 m/s.  Blade height comes from hardware
+# testing on HM442 (docs/blade-height-findings.md), not from that table, whose
+# Luba default (20-35) contradicts the observed 50 mm resting height.
+_LUBA_FALLBACK_LIMITS = {
+    "blade_height":  {"min": 30,  "max": 70},
+    "working_speed": {"min": 0.2, "max": 1.2},
+}
+
+
+def _device_limits(h, name: str = "") -> "dict | None":
+    """Per-model operating limits (blade height mm, working speed m/s).
+
+    Prefers pymammotion's per-model table.  When that yields nothing usable
+    (blade_height max of 0 == the Yuka fallback for an unlisted product key)
+    and the device *name* says this is a Luba, fall back to Luba-family values
+    rather than reporting None — otherwise the UI silently applies Yuka
+    ceilings to a Luba.  Returns None only when we genuinely can't tell.
+    """
     try:
         limits = h.snapshot.raw.device_limits
-        if limits.blade_height.max <= 0:
-            return None
-        return {
-            "blade_height":  {"min": limits.blade_height.min,  "max": limits.blade_height.max},
-            "working_speed": {"min": limits.working_speed.min, "max": limits.working_speed.max},
-        }
+        if limits.blade_height.max > 0:
+            return {
+                "blade_height":  {"min": limits.blade_height.min,  "max": limits.blade_height.max},
+                "working_speed": {"min": limits.working_speed.min, "max": limits.working_speed.max},
+            }
     except (AttributeError, TypeError):
-        return None
+        pass
+    # No usable per-model entry.  Only claim Luba limits for an actual Luba.
+    if name and not DeviceType.is_yuka(name) and "luba" in name.lower():
+        return dict(_LUBA_FALLBACK_LIMITS)
+    return None
 
 
 def _current_blade_height(h) -> "int | None":
@@ -772,7 +821,7 @@ async def post_setting(name: str, setting: str, payload: dict = Body(...)):
         value = float(payload.get("value"))
     except (TypeError, ValueError):
         raise HTTPException(400, 'body must be {"value": <number>}')
-    limits = _device_limits(h)
+    limits = _device_limits(h, name)
     if setting == "blade_height":
         lo, hi = (limits["blade_height"]["min"], limits["blade_height"]["max"]) if limits else (20, 100)
         v: "int | float" = int(min(max(value, lo), hi))
@@ -1060,7 +1109,7 @@ async def status(name: str):
         "orientation":    _current_orientation(h),  # heading in degrees, or None
         "blade_height":   _current_blade_height(h),  # mm, live event preferred, or None
         "blade_adjusting": _blade_adjusting(h),      # height motor currently moving
-        "limits":         _device_limits(h),         # per-model slider bounds, or None
+        "limits":         _device_limits(h, name),         # per-model slider bounds, or None
         "blades_on":      blades_on,     # mower-reported disc rotation, or None
         "cutter_mode":    cutter_mode,   # 0 normal / 1 slow / 2 fast, or None
         "cutter_rpm":     cutter_rpm,    # live blade RPM, or None
@@ -1212,7 +1261,7 @@ async def diag(name: str):
 
     try:
         limits = _diag_jsonable(h.snapshot.raw.device_limits)
-        out["limits"] = limits if isinstance(limits, dict) else _device_limits(h)
+        out["limits"] = limits if isinstance(limits, dict) else _device_limits(h, name)
     except Exception as exc:  # noqa: BLE001
         out["limits"] = {"error": str(exc)}
 
@@ -1639,7 +1688,7 @@ async def _trace_send_blade_height(h, value: int) -> dict:
     screw — the same write /api/set/{name}/blade_height already performs from
     the main UI — and cannot move the mower or spin the blade disc.  Clamped to
     the mower's own reported model limits exactly as post_setting() does."""
-    limits = _device_limits(h)
+    limits = _device_limits(h, getattr(h, "device_name", "") or "")
     lo, hi = (limits["blade_height"]["min"], limits["blade_height"]["max"]) if limits else (20, 100)
     applied = int(min(max(int(value), lo), hi))
     await h.send_raw(h.commands.set_blade_height(applied))
@@ -2405,8 +2454,8 @@ async def joystick_ws(ws: WebSocket, name: str):
             # so you could only go straight OR turn.  Feeding both axes through
             # the mower's own transform keeps the scaling identical to the old
             # single-axis helpers (linear + = fwd, angular + = right).
-            lp = get_percent(min(abs(y), MAX_LINEAR) * 100)
-            ap = get_percent(min(abs(x), MAX_ANGULAR) * 100)
+            lp = _stick_percent(abs(y), MAX_LINEAR)
+            ap = _stick_percent(abs(x), MAX_ANGULAR)
             linear_speed, angular_speed = transform_both_speeds(
                 90.0 if y >= 0 else 270.0,   # forward / back
                 0.0 if x >= 0 else 180.0,    # right / left
