@@ -2,241 +2,654 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Luba Diagnostics</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Diagnostics · Luba Remote</title>
+
+<!-- theme.js FIRST and synchronous, before any stylesheet paints, or the page
+     shows the OS theme for a frame and visibly flips. -->
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/theme.css">
+
+<!-- crossorigin is load-bearing: a manifest link is fetched with credentials
+     omitted, so the auth cookie is not sent and the middleware 401s it. -->
+<link rel="manifest" href="/static/manifest.webmanifest" crossorigin="use-credentials">
+<link rel="apple-touch-icon" href="/static/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Luba Diag">
+
 <style>
-  :root {
-    --bg:#0b0f14; --surface:#121924; --surface-2:#1a2432;
-    --border:rgba(255,255,255,.07); --text:#e8eef5; --text-dim:#8fa0b3;
-    --accent:#2dd47a; --danger:#ff5d5d; --warn:#ffb454; --info:#4aa8ff;
-    --radius:14px; --radius-sm:10px;
-    --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  }
-  * { box-sizing:border-box; }
-  body {
-    margin:0; padding:16px; color:var(--text); font-family:var(--font);
-    background:radial-gradient(circle at 50% -20%, #131c29, var(--bg) 60%) var(--bg);
-    min-height:100vh;
-  }
-  header {
-    display:flex; flex-wrap:wrap; align-items:center; gap:10px;
-    margin:0 0 12px;
-  }
-  h1 { margin:0 8px 0 0; font-size:20px; font-weight:700; letter-spacing:.2px; }
-  h2 { margin:0 0 10px; font-size:14px; font-weight:700; letter-spacing:.3px;
-       color:var(--text); }
-  h2 .raw { font-family:var(--mono); font-weight:600; font-size:12px;
-            color:var(--text-dim); margin-left:8px; }
-  select, button, .btnlike {
-    font-family:var(--font); font-size:14px; padding:9px 14px;
-    border:1px solid var(--border); border-radius:var(--radius-sm);
-    background:var(--surface-2); color:var(--text); cursor:pointer;
-    text-decoration:none; display:inline-block;
-  }
-  select:focus, button:focus-visible { outline:none; border-color:rgba(45,212,122,.5); }
-  button:disabled { opacity:.5; cursor:default; }
-  button.active { border-color:rgba(255,180,84,.6); color:var(--warn); }
-  #probeBtn {
-    background:var(--accent); color:#04371c; font-weight:700; border:0;
-  }
-  .intro { color:var(--text-dim); font-size:13px; line-height:1.55;
-           max-width:860px; margin:0 0 16px; }
-  .intro strong { color:var(--text); }
-  .banner {
-    background:rgba(255,93,93,.12); border:1px solid rgba(255,93,93,.4);
-    color:var(--danger); padding:10px 14px; border-radius:var(--radius-sm);
-    font-size:13px; margin:0 0 14px;
-  }
-  .hidden { display:none; }
-  .card {
-    background:var(--surface); border:1px solid var(--border);
-    border-radius:var(--radius); padding:16px; margin:0 0 14px;
-  }
-  .grid {
-    display:grid; gap:14px; margin:0 0 14px;
-    grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));
-  }
-  .grid .card { margin:0; }
-  .scroll { overflow-x:auto; }
-  table { border-collapse:collapse; width:100%; font-size:13px; }
-  th { text-align:left; color:var(--text-dim); font-weight:600; font-size:11px;
-       letter-spacing:.4px; text-transform:uppercase; padding:6px 12px 6px 0;
-       border-bottom:1px solid var(--border); white-space:nowrap; }
-  td { padding:6px 12px 6px 0; border-bottom:1px solid var(--border);
-       vertical-align:top; }
-  tr:last-child td { border-bottom:0; }
-  table.kv td:first-child { color:var(--text-dim); white-space:nowrap;
-                            font-family:var(--mono); font-size:12px; }
-  table.kv td:last-child { font-family:var(--mono); font-size:12px;
-                           word-break:break-word; }
-  .mono { font-family:var(--mono); font-size:12px; }
-  .dim { color:var(--text-dim); }
-  .small { font-size:12px; }
-  .bin {
-    font-family:var(--mono); font-size:16px; letter-spacing:2px;
-    background:var(--surface-2); border:1px solid var(--border);
-    border-radius:var(--radius-sm); padding:10px 12px; margin:0 0 8px;
-    overflow-x:auto; white-space:nowrap;
-  }
-  .b-dim    { color:#4a5a6d; }
-  .b-info   { color:var(--info); }
-  .b-accent { color:var(--accent); font-weight:700; }
-  .b-warn   { color:var(--warn); font-weight:700; }
-  .badge {
-    display:inline-block; padding:3px 10px; border-radius:999px;
-    font-size:11px; font-weight:700; letter-spacing:.3px; white-space:nowrap;
-  }
-  .badge.ok   { background:rgba(45,212,122,.15); color:var(--accent);
-                border:1px solid rgba(45,212,122,.4); }
-  .badge.warn { background:rgba(255,180,84,.14); color:var(--warn);
-                border:1px solid rgba(255,180,84,.4); }
-  .badge.mute { background:rgba(143,160,179,.12); color:var(--text-dim);
-                border:1px solid rgba(143,160,179,.35); }
-  .badge.err  { background:rgba(255,93,93,.14); color:var(--danger);
-                border:1px solid rgba(255,93,93,.4); }
-  details { margin-top:6px; }
-  summary { cursor:pointer; color:var(--info); font-size:12px; }
-  pre {
-    background:var(--surface-2); border:1px solid var(--border);
-    border-radius:var(--radius-sm); padding:10px; font-size:11px;
-    overflow-x:auto; margin:6px 0 0; max-width:640px;
-  }
-  #probeState { margin-left:10px; font-size:13px; }
-  .probehead { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
-               margin:0 0 10px; }
+/* ============================================================================
+   Diagnostics — page-specific rules ONLY.
+   Tokens, .card/.btn/.chip/.field/.segmented/.topbar/.u-* and every colour live
+   in theme.css. Nothing here redefines them; nothing here hardcodes a colour.
+   ========================================================================= */
 
-  /* ── Message trace ──────────────────────────────────────────────────── */
-  input[type=number] {
-    font-family:var(--mono); font-size:14px; padding:9px 10px; width:86px;
-    border:1px solid var(--border); border-radius:var(--radius-sm);
-    background:var(--surface-2); color:var(--text);
-  }
-  input[type=number]:focus { outline:none; border-color:rgba(74,168,255,.5); }
-  .ctl { display:flex; flex-wrap:wrap; align-items:center; gap:8px;
-         margin:0 0 12px; }
-  .ctl label { display:inline-flex; align-items:center; gap:6px;
-               font-size:12px; color:var(--text-dim); letter-spacing:.2px; }
-  #traceBtn { background:var(--info); color:#042440; font-weight:700; border:0; }
-  #traceState { font-size:13px; }
-  .verdict {
-    padding:11px 14px; border-radius:var(--radius-sm); font-size:13.5px;
-    font-weight:700; line-height:1.45; margin:0 0 12px;
-  }
-  .verdict.yes { background:rgba(45,212,122,.14); color:var(--accent);
-                 border:1px solid rgba(45,212,122,.45); }
-  .verdict.no  { background:rgba(255,93,93,.12); color:var(--danger);
-                 border:1px solid rgba(255,93,93,.45); }
-  .verdict .sub { display:block; font-weight:500; font-size:12px;
-                  color:var(--text-dim); margin-top:4px; }
-  .sub-h { font-size:11px; font-weight:700; letter-spacing:.4px;
-           text-transform:uppercase; color:var(--text-dim); margin:14px 0 6px; }
-  table.diff td.p { font-family:var(--mono); font-size:12px; color:var(--text-dim);
-                    white-space:nowrap; }
-  table.diff td.v { font-family:var(--mono); font-size:12px; word-break:break-word;
-                    max-width:340px; }
-  table.diff tr.chg td { background:rgba(255,180,84,.10); }
-  table.diff tr.chg td.p { box-shadow:inset 2px 0 0 var(--warn); color:var(--warn); }
-  .tlwrap { max-height:520px; overflow:auto; }
-  table.tl td.t  { font-family:var(--mono); font-size:12px; color:var(--text-dim);
-                   text-align:right; white-space:nowrap; width:1%; }
-  table.tl td.ty { font-family:var(--mono); font-size:12px; color:var(--info);
-                   white-space:nowrap; }
-  table.tl td.s  { font-family:var(--mono); font-size:12px; word-break:break-word; }
-  table.tl tr.knife td.ty { color:var(--accent); font-weight:700; }
-  table.tl tr.knife td { background:rgba(45,212,122,.07); }
+/* ── Shell ───────────────────────────────────────────────────────────────── */
 
-  @media (max-width:520px) {
-    body { padding:10px; }
-    .grid { grid-template-columns:1fr; }
-  }
+.topbar h1 { font-size: 17px; }
+.topbar .spacer { flex: 1; }
+
+a.btn { text-decoration: none; }
+
+/* Paused is a held state, not a press — make it read as one. */
+#pause[aria-pressed="true"] {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 38%, transparent);
+  color: var(--warn);
+}
+
+.wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding:
+    14px
+    max(14px, env(safe-area-inset-right))
+    calc(32px + env(safe-area-inset-bottom))
+    max(14px, env(safe-area-inset-left));
+}
+
+.ico {
+  width: 18px; height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ico-sm { width: 14px; height: 14px; }
+
+.hidden { display: none !important; }
+
+/* Anything that can outgrow its column scrolls inside itself — the page never
+   scrolls sideways. */
+.scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+/* ── Section rhythm ──────────────────────────────────────────────────────── */
+
+section.card { margin: 0 0 14px; }
+.sec-h { font-size: 16px; }
+.sec-t { margin: 0 0 10px; }        /* .u-label used as a card title */
+.sub-h { margin: 18px 0 8px; }      /* .u-label used as an in-card divider */
+
+.sec-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+.sec-head .spacer { flex: 1 1 12px; }
+
+/* Server-supplied rationale strings carry 50-character unbroken tokens like
+   MctlDriver(bidire_speed_read_set=DrvSrSpeed(rw=0)) — they must break, or
+   they punch out of a 320px column. */
+.prose, .hint, .prow-d, .prow-w, .verdict-s, .focus-n { overflow-wrap: anywhere; }
+
+.prose {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-2);
+  max-width: 78ch;
+}
+.prose:last-child { margin-bottom: 0; }
+.prose strong { color: var(--text); font-weight: 620; }
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+  max-width: 78ch;
+}
+
+/* ── Control strip (mower / pause / liveness) ────────────────────────────── */
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.field-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.field-wrap-sm { flex: 0 1 152px; }
+.strip-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  flex: 1 1 auto;
+}
+#liveChip.is-live { color: var(--accent-fg); }
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 11px 14px;
+  border-radius: var(--r-sm);
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 34%, transparent);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.banner .ico { margin-top: 1px; }
+
+/* ── Tables (shared skeleton) ────────────────────────────────────────────── */
+
+.tbl {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.tbl th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 0 12px 7px 0;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.tbl td {
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl td:last-child, .tbl th:last-child { padding-right: 0; }
+
+/* Key → value dump. Fixed columns: a 45-character dotted path must wrap inside
+   its own column rather than squeeze the value column down to five characters
+   and break a reading like 2361861 across two lines. */
+.kv { table-layout: fixed; }
+.kv td {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.kv td:first-child { color: var(--text-2); width: 58%; }
+
+.grid {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 14px;
+  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+}
+.grid section.card { margin: 0; }
+
+/* ── sensor_status: the centrepiece ──────────────────────────────────────── */
+
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  margin: 0 0 12px;
+}
+.readout-v {
+  font-family: var(--font-mono);
+  font-size: 30px;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+/* 32 bit cells. Byte-aligned wrapping at every breakpoint: one byte per row on
+   phones, two on tablets, the whole word on desktop — so a row break never
+   falls mid-field. */
+.bitstrip {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 3px;
+  padding: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+@media (min-width: 480px) { .bitstrip { grid-template-columns: repeat(16, minmax(0, 1fr)); } }
+@media (min-width: 780px) { .bitstrip { grid-template-columns: repeat(32, minmax(0, 1fr)); } }
+
+.bit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 5px 0 3px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--surface);
+  min-width: 0;
+}
+.bit b {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--text-3);
+}
+/* Bit index doubles as a colour ruler: even a zero bit shows which field it
+   belongs to. */
+.bit i {
+  font-style: normal;
+  font-size: 9px;
+  line-height: 1.1;
+  opacity: .8;
+  color: var(--text-3);
+}
+.bit.on b { font-weight: 700; }
+
+.bit.t-bumper i { color: color-mix(in srgb, var(--warn) 72%, var(--text-3)); }
+.bit.t-bumper.on { background: color-mix(in srgb, var(--warn) 16%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 46%, transparent); }
+.bit.t-bumper.on b { color: var(--warn); }
+
+.bit.t-ult-a i, .bit.t-ult-b i { color: color-mix(in srgb, var(--info) 72%, var(--text-3)); }
+.bit.t-ult-a.on { background: color-mix(in srgb, var(--info) 16%, var(--surface)); border-color: color-mix(in srgb, var(--info) 46%, transparent); }
+.bit.t-ult-a.on b { color: var(--info); }
+/* Adjacent ultrasonic triples alternate intensity so the four sensors read as
+   four fields, not one twelve-bit blur. */
+.bit.t-ult-b.on { background: color-mix(in srgb, var(--info) 9%, var(--surface)); border-color: color-mix(in srgb, var(--info) 28%, transparent); }
+.bit.t-ult-b.on b { color: color-mix(in srgb, var(--info) 80%, var(--text)); }
+
+/* Blade bits are permanently ringed — a decode bug here is why this page
+   exists, so they must be findable at a glance whether set or clear. */
+.bit.t-blade {
+  border-color: color-mix(in srgb, var(--accent-fg) 34%, transparent);
+  background: color-mix(in srgb, var(--accent-fg) 5%, var(--surface));
+}
+.bit.t-blade i { color: var(--accent-fg); opacity: 1; }
+.bit.t-blade.on {
+  background: var(--accent);
+  border-color: transparent;
+}
+.bit.t-blade.on b { color: var(--accent-ink); }
+.bit.t-blade.on i { color: var(--accent-ink); opacity: .75; }
+
+.bit.t-dim.on b { color: var(--text-2); }
+.bit.t-dim.on { background: var(--surface-3); }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.lg { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sw { width: 10px; height: 10px; border-radius: 3px; flex: none; background: currentColor; }
+.sw-bumper { color: var(--warn); }
+.sw-blade  { color: var(--accent-fg); }
+.sw-ult    { color: var(--info); }
+.sw-dim    { color: var(--text-3); }
+
+.focus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 22px;
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent-fg) 26%, transparent);
+}
+.focus-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.focus-v {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.1;
+  color: var(--accent-fg);
+}
+.focus-v small { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.focus-n {
+  flex: 1 1 260px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.bits-t td:first-child, .bits-t td:nth-child(2) { white-space: nowrap; }
+.bits-t .fname { display: inline-flex; align-items: center; gap: 8px; }
+.bits-t td.n { font-family: var(--font-mono); }
+.bits-t tr.row-blade td { background: var(--accent-soft); }
+.bits-t tr.row-blade td:first-child { box-shadow: inset 2px 0 0 var(--accent-fg); padding-left: 8px; }
+
+/* ── Disclosure + JSON ───────────────────────────────────────────────────── */
+
+.disclose { margin: 2px 0 0; }
+.disclose > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;              /* tap target */
+  font-size: 12.5px;
+  font-weight: 560;
+  color: var(--text-2);
+  cursor: pointer;
+  list-style: none;
+}
+.disclose > summary::-webkit-details-marker { display: none; }
+.disclose > summary:hover { color: var(--text); }
+.disclose > summary .cv { transition: transform var(--dur-1) var(--ease); }
+.disclose[open] > summary .cv { transform: rotate(90deg); }
+
+pre.json {
+  margin: 0 0 6px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  max-height: 360px;
+  max-width: 100%;
+}
+
+/* ── Capability probe ────────────────────────────────────────────────────── */
+
+.runstate {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  min-height: 20px;
+}
+
+.plist { display: flex; flex-direction: column; }
+.prow { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.prow:first-child { padding-top: 4px; }
+.prow:last-child { border-bottom: 0; padding-bottom: 0; }
+.prow-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.prow-cmd {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 620;
+  word-break: break-word;
+  min-width: 0;
+}
+.prow-h .chip { margin-left: auto; }
+.prow-d { margin: 6px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
+.prow-w { margin: 4px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--text-3); }
+.prow-w b { font-family: var(--font-mono); font-weight: 600; }
+
+/* ── Message trace ───────────────────────────────────────────────────────── */
+
+.ctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+  margin: 0 0 12px;
+}
+.ctl .btn { flex: 0 0 auto; }
+.seg-tall > button { min-height: 44px; }
+
+.verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--r-sm);
+  margin: 0 0 14px;
+}
+.verdict .ico { width: 20px; height: 20px; margin-top: 1px; }
+.verdict-t { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+.verdict-t small { font-weight: 500; font-size: 12px; color: var(--text-2); }
+.verdict-s {
+  display: block;
+  margin-top: 5px;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.verdict.yes {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent-fg) 30%, transparent);
+  color: var(--accent-fg);
+}
+.verdict.no {
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  color: var(--danger);
+}
+
+.typechips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Message-type names are long; let the pill wrap rather than overflow. */
+.typechips .chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.typechips .chip .n { color: var(--text-3); font-family: var(--font-mono); }
+
+.diff td.p { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.diff td.v { font-family: var(--font-mono); font-size: 12px; word-break: break-word; }
+.diff tr.chg td { background: var(--warn-soft); }
+.diff tr.chg td.p { box-shadow: inset 2px 0 0 var(--warn); color: var(--warn); padding-left: 8px; }
+
+.tlwrap {
+  max-height: 520px;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.tlwrap .tbl { font-size: 12px; }
+.tlwrap .tbl th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding: 9px 10px;
+}
+.tlwrap .tbl td { padding: 9px 10px; border-bottom: 0; border-top: 1px solid var(--border); }
+.tl td.t  { font-family: var(--font-mono); color: var(--text-2); text-align: right; white-space: nowrap; width: 1%; }
+.tl td.ty { font-family: var(--font-mono); color: var(--info); word-break: break-word; }
+.tl td.s  { font-family: var(--font-mono); word-break: break-word; }
+.tl tr.knife td { background: var(--accent-soft); }
+.tl tr.knife td.ty { color: var(--accent-fg); font-weight: 700; }
+.tl tr.knife td.t { box-shadow: inset 2px 0 0 var(--accent-fg); }
+
+@media (max-width: 420px) {
+  .wrap { padding-top: 12px; }
+  .readout-v { font-size: 26px; }
+}
 </style>
 </head>
 <body>
 
-<header>
-  <h1>Mower diagnostics</h1>
-  <select id="mower" aria-label="Mower"></select>
-  <button id="pause" type="button">Pause</button>
-  <a href="/" class="btnlike">&#8592; Back</a>
+<header class="topbar">
+  <a href="/" class="btn btn-ghost btn-icon" aria-label="Back to control" title="Back to control">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+  </a>
+  <h1>Diagnostics</h1>
+  <span class="spacer"></span>
+  <button id="themeBtn" type="button" class="btn btn-ghost btn-icon" aria-label="Theme"></button>
 </header>
 
-<p class="intro">
-  This page shows the raw state PyMammotion holds for the mower — refreshed
-  every 3&nbsp;s — and can probe which <strong>read-only query commands</strong>
-  the firmware actually answers over the BLE proxy. The probe never sends
-  anything that moves the mower, spins the blades, or changes a setting.
-  Note that <strong>sent-no-change is NOT proof a command is unsupported</strong>:
-  some replies land in fields this page does not watch, and an answer identical
-  to the current value produces no visible diff.
-</p>
+<div class="wrap">
 
-<div id="conn" class="banner hidden"></div>
+  <section class="card card-pad">
+    <div class="sec-head">
+      <h2 class="sec-h">Raw mower state</h2>
+      <span class="spacer"></span>
+      <span class="chip chip-accent">
+        <svg class="ico ico-sm" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        read-only
+      </span>
+    </div>
+    <p class="prose">
+      Everything PyMammotion currently holds for the mower, refreshed every
+      3&nbsp;s. The tools below probe which <strong>read-only query
+      commands</strong> the firmware actually answers over the BLE proxy, and
+      tap the inbound message stream around a single command. Nothing on this
+      page moves the mower, spins the blades, or changes a setting.
+    </p>
+    <p class="prose">
+      <strong>sent-no-change is not proof a command is unsupported</strong>:
+      some replies land in fields this page does not watch, and an answer
+      identical to the current value produces no visible diff.
+    </p>
+  </section>
 
-<section id="sensorCard" class="card">
-  <h2>sensor_status</h2>
-  <p class="dim">waiting for first report&hellip;</p>
-</section>
-
-<div id="cards" class="grid"></div>
-
-<section class="card">
-  <div class="probehead">
-    <h2 style="margin:0">Capability probe</h2>
-    <span style="flex:1"></span>
-    <button id="probeBtn" type="button">Run capability probe</button>
-    <span id="probeState" class="dim"></span>
-  </div>
-  <p class="dim small" style="margin:0 0 10px">
-    Sends 9 read-only queries in sequence (~30&nbsp;s total), snapshotting the
-    relevant fields before and after each. <span class="badge ok">replied</span>
-    = a watched field changed; <span class="badge warn">sent-no-change</span>
-    = sent but nothing we watch moved (not proof of unsupported);
-    <span class="badge mute">not-in-lib</span> = the installed PyMammotion has
-    no such command; <span class="badge err">error</span> = sending failed.
-  </p>
-  <div id="probeResult"></div>
-</section>
-
-<section class="card">
-  <div class="probehead">
-    <h2 style="margin:0">Message trace</h2>
-    <span style="flex:1"></span>
-    <button id="copyTrace" type="button" class="hidden">Copy result JSON</button>
-  </div>
-  <p class="dim small" style="margin:0 0 12px; max-width:860px; line-height:1.55">
-    Taps the decoded inbound BLE stream, sends <strong>one</strong> curated
-    command, then records <em>every</em> message the mower pushes back for a few
-    seconds. This is what separates the three possibilities for
-    <span class="mono">set_blade_height</span>: a
-    <span class="mono">driver.toapp_knife_status_change</span> in the timeline
-    means the mower <strong>accepted</strong> the command and only our read-back
-    is stale; driver traffic without a knife event means it
-    <strong>replied but refused</strong>; no new traffic at all means it
-    <strong>ignored</strong> it. Run <span class="mono">noop</span> first — that
-    sends nothing, so whatever it captures is the mower&rsquo;s unprompted
-    background chatter, which is the baseline every other run must be read
-    against. Nothing on the command list moves the mower or spins the blades.
-  </p>
-  <div class="ctl">
-    <label>Command <select id="traceCmd" aria-label="Trace command"></select></label>
-    <label id="traceValWrap">Height (mm)
-      <input id="traceVal" type="number" min="10" max="120" step="1" value="35">
+  <div class="strip">
+    <label class="field-wrap">
+      <span class="u-label">Mower</span>
+      <select id="mower" class="field" aria-label="Mower"></select>
     </label>
-    <label>Listen for
-      <select id="traceSecs" aria-label="Listen seconds">
-        <option value="6">6 s</option>
-        <option value="12" selected>12 s</option>
-        <option value="20">20 s</option>
-        <option value="30">30 s</option>
-      </select>
-    </label>
-    <button id="traceBtn" type="button">Run trace</button>
-    <span id="traceState" class="dim"></span>
+    <button id="pause" type="button" class="btn" aria-pressed="false">
+      <span class="btn-ico" id="pauseIco">
+        <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+          <rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>
+        </svg>
+      </span>
+      <span id="pauseLabel">Pause</span>
+    </button>
+    <div class="strip-status">
+      <span class="chip is-live" id="liveChip"><span class="dot dot-pulse"></span>live · 3 s</span>
+      <span class="chip" id="ageChip">last report <b class="u-mono">—</b></span>
+    </div>
   </div>
-  <p id="traceWhy" class="dim small mono" style="margin:0 0 12px; line-height:1.5"></p>
-  <div id="traceResult"></div>
-</section>
+
+  <div id="conn" class="banner hidden" role="alert">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+    <span id="connMsg"></span>
+  </div>
+
+  <section id="sensorCard" class="card card-pad">
+    <div class="sec-head"><h2 class="sec-h">sensor_status</h2></div>
+    <p class="hint">Waiting for the first report&hellip;</p>
+  </section>
+
+  <div id="cards" class="grid"></div>
+
+  <section class="card card-pad">
+    <div class="sec-head">
+      <h2 class="sec-h">Capability probe</h2>
+      <span class="spacer"></span>
+      <span class="runstate"><span id="probeState" role="status" aria-live="polite"></span></span>
+      <button id="probeBtn" type="button" class="btn btn-primary">
+        <span class="btn-ico">
+          <svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+            <polygon points="6 3 20 12 6 21 6 3"/>
+          </svg>
+        </span>
+        <span>Run probe</span>
+      </button>
+    </div>
+    <p class="prose">
+      Sends 9 read-only queries in sequence (~28&nbsp;s total), snapshotting the
+      relevant fields before and after each.
+      <span class="chip chip-accent">replied</span> = a watched field changed;
+      <span class="chip chip-warn">sent-no-change</span> = sent but nothing we
+      watch moved (not proof of unsupported);
+      <span class="chip">not-in-lib</span> = the installed PyMammotion has no
+      such command; <span class="chip chip-danger">error</span> = sending
+      failed.
+    </p>
+    <div id="probeResult"></div>
+  </section>
+
+  <section class="card card-pad">
+    <div class="sec-head">
+      <h2 class="sec-h">Message trace</h2>
+      <span class="spacer"></span>
+      <button id="copyTrace" type="button" class="btn hidden">
+        <span class="btn-ico">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </span>
+        <span id="copyTraceLabel">Copy result JSON</span>
+      </button>
+    </div>
+    <p class="prose">
+      Taps the decoded inbound BLE stream, sends <strong>one</strong> curated
+      command, then records <em>every</em> message the mower pushes back for a
+      few seconds. This is what separates the three possibilities for
+      <code>set_blade_height</code>: a
+      <code>driver.toapp_knife_status_change</code> in the timeline means the
+      mower <strong>accepted</strong> the command and only our read-back is
+      stale; driver traffic without a knife event means it <strong>replied but
+      refused</strong>; no new traffic at all means it
+      <strong>ignored</strong> it. Run <code>noop</code> first — that sends
+      nothing, so whatever it captures is the mower&rsquo;s unprompted
+      background chatter, which is the baseline every other run must be read
+      against. Nothing on the command list moves the mower or spins the blades.
+    </p>
+    <div class="ctl">
+      <label class="field-wrap">
+        <span class="u-label">Command</span>
+        <select id="traceCmd" class="field" aria-label="Trace command"></select>
+      </label>
+      <label class="field-wrap field-wrap-sm" id="traceValWrap">
+        <span class="u-label">Height (mm)</span>
+        <input id="traceVal" class="field u-mono" type="number" inputmode="numeric"
+               min="10" max="120" step="1" value="35">
+      </label>
+      <div class="field-wrap">
+        <span class="u-label" id="secsLabel">Listen for</span>
+        <div class="segmented seg-tall" id="traceSecs" role="group" aria-labelledby="secsLabel">
+          <button type="button" data-secs="6" aria-pressed="false">6 s</button>
+          <button type="button" data-secs="12" aria-pressed="true">12 s</button>
+          <button type="button" data-secs="20" aria-pressed="false">20 s</button>
+          <button type="button" data-secs="30" aria-pressed="false">30 s</button>
+        </div>
+      </div>
+      <button id="traceBtn" type="button" class="btn btn-primary">
+        <span class="btn-ico">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </span>
+        <span>Run trace</span>
+      </button>
+    </div>
+    <div class="runstate" style="margin:0 0 10px">
+      <span id="traceState" role="status" aria-live="polite"></span>
+    </div>
+    <p id="traceWhy" class="hint" style="margin:0 0 12px"></p>
+    <div id="traceResult"></div>
+  </section>
+
+</div>
 
 <script>
 "use strict";
@@ -252,12 +665,44 @@ var paused = false;
 var inflight = false;
 var probing = false;
 
+/* Inline SVG only — no icon font, no emoji as iconography. */
+var ICO = {
+  chev: '<svg class="ico ico-sm cv" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>',
+  ok:   '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+  bad:  '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+  sys:  '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
+  sun:  '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>',
+  moon: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+  play: '<svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>',
+  pauseIco: '<svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>'
+};
+
+/* Collapsible block used for before/after and full-JSON payloads. */
+function disclose(label, inner) {
+  return '<details class="disclose"><summary>' + ICO.chev + esc(label) + "</summary>" + inner + "</details>";
+}
+
 function banner(msg) {
   var el = $("#conn");
   if (!msg) { el.classList.add("hidden"); return; }
-  el.textContent = msg;
+  $("#connMsg").textContent = msg;
   el.classList.remove("hidden");
 }
+
+// ── Theme control (system → light → dark) ───────────────────────────────────
+function syncTheme() {
+  var mode = (window.Theme && window.Theme.get()) ? window.Theme.get() : "system";
+  var btn = $("#themeBtn");
+  btn.innerHTML = mode === "light" ? ICO.sun : mode === "dark" ? ICO.moon : ICO.sys;
+  btn.setAttribute("aria-label", "Theme: " + mode + " — tap to change");
+  btn.setAttribute("title", "Theme: " + mode);
+}
+$("#themeBtn").addEventListener("click", function () {
+  if (window.Theme) window.Theme.cycle();
+  syncTheme();
+});
+document.documentElement.addEventListener("themechange", syncTheme);
+syncTheme();
 
 // ── Mower picker ─────────────────────────────────────────────────────────────
 async function loadMowers() {
@@ -295,8 +740,16 @@ $("#mower").addEventListener("change", function (e) {
 });
 $("#pause").addEventListener("click", function () {
   paused = !paused;
-  $("#pause").textContent = paused ? "Resume" : "Pause";
-  $("#pause").classList.toggle("active", paused);
+  var btn = $("#pause");
+  btn.setAttribute("aria-pressed", paused ? "true" : "false");
+  $("#pauseLabel").textContent = paused ? "Resume" : "Pause";
+  $("#pauseIco").innerHTML = paused ? ICO.play : ICO.pauseIco;
+  var live = $("#liveChip");
+  live.classList.toggle("is-live", !paused);
+  live.classList.toggle("chip-warn", paused);
+  live.innerHTML = paused
+    ? '<span class="dot"></span>paused'
+    : '<span class="dot dot-pulse"></span>live · 3 s';
 });
 
 // ── Generic key→value card rendering ────────────────────────────────────────
@@ -311,60 +764,116 @@ function flat(obj, prefix, out) {
 }
 function kvTable(obj) {
   var rows = flat(obj, "", []);
-  if (!rows.length) return '<p class="dim small">no data</p>';
-  return '<div class="scroll"><table class="kv">' + rows.map(function (r) {
+  if (!rows.length) return '<p class="hint">no data</p>';
+  return '<div class="scroll"><table class="tbl kv">' + rows.map(function (r) {
     var val = (r[1] === null || r[1] === undefined || r[1] === "")
-      ? '<span class="dim">&mdash;</span>' : esc(r[1]);
+      ? '<span class="u-dim">&mdash;</span>' : esc(r[1]);
     return "<tr><td>" + esc(r[0]) + "</td><td>" + val + "</td></tr>";
   }).join("") + "</table></div>";
 }
 
 // ── sensor_status panel: raw + binary + bit-field table ─────────────────────
+// Documented layout, MSB → LSB. `tone` drives the colour coding; the two
+// ultrasonic tones alternate so four adjacent 3-bit sensors stay separable.
+var SENSOR_FIELDS = [
+  { lo: 24, hi: 31, tone: "dim",   name: "undocumented" },
+  { lo: 21, hi: 23, tone: "ult-b", name: "Ultrasonic right",       raw: "ult_right_bits_21_23",       lib: "ult_right",       sw: "ult" },
+  { lo: 18, hi: 20, tone: "ult-a", name: "Ultrasonic right-front", raw: "ult_right_front_bits_18_20", lib: "ult_right_front", sw: "ult" },
+  { lo: 15, hi: 17, tone: "ult-b", name: "Ultrasonic left-front",  raw: "ult_left_front_bits_15_17",  lib: "ult_left_front",  sw: "ult" },
+  { lo: 12, hi: 14, tone: "ult-a", name: "Ultrasonic left",        raw: "ult_left_bits_12_14",        lib: "ult_left",        sw: "ult" },
+  { lo:  9, hi: 11, tone: "blade", name: "Blade disc",             raw: "blade_bits_9_11",            lib: "blade_state",     sw: "blade" },
+  { lo:  3, hi:  8, tone: "dim",   name: "undocumented" },
+  { lo:  0, hi:  2, tone: "bumper", name: "Bumper",                raw: "bumper_bits_0_2",            lib: "bumper_state",    sw: "bumper" }
+];
+function fieldForBit(i) {
+  for (var n = 0; n < SENSOR_FIELDS.length; n++) {
+    if (i >= SENSOR_FIELDS[n].lo && i <= SENSOR_FIELDS[n].hi) return SENSOR_FIELDS[n];
+  }
+  return SENSOR_FIELDS[0];
+}
+function sensorHeader(extra) {
+  return '<div class="sec-head"><h2 class="sec-h">sensor_status</h2>' + (extra || "") + "</div>";
+}
+
 function renderSensor(dev) {
   var el = $("#sensorCard");
   if (!dev || dev.error || dev.sensor_status === undefined || dev.sensor_status === null) {
-    el.innerHTML = "<h2>sensor_status</h2><p class='dim'>not reported yet" +
-      (dev && dev.error ? " (" + esc(dev.error) + ")" : "") + "</p>";
+    el.innerHTML = sensorHeader() + '<p class="hint">Not reported yet' +
+      (dev && dev.error ? " (" + esc(dev.error) + ")" : "") + ".</p>";
     return;
   }
-  var bin = String(dev.sensor_status_bin || "").padStart(32, "0");
-  // bin is MSB-first: string index i holds bit (31 - i).
-  var seg = function (a, b, cls) { return '<span class="' + cls + '">' + esc(bin.slice(a, b)) + "</span>"; };
-  var binHtml =
-    seg(0, 8, "b-dim") +      // bits 31-24 (undocumented)
-    seg(8, 20, "b-info") +    // bits 23-12 ultrasonics
-    seg(20, 23, "b-accent") + // bits 11-9  blade
-    seg(23, 29, "b-dim") +    // bits 8-3   (undocumented)
-    seg(29, 32, "b-warn");    // bits 2-0   bumper
+
+  // MSB-first, exactly 32 chars: string index i holds bit (31 - i).
+  var bin = String(dev.sensor_status_bin || "")
+    .replace(/[^01]/g, "").padStart(32, "0").slice(-32);
+  var num = Number(dev.sensor_status);
+  var hex = isFinite(num)
+    ? "0x" + (num >>> 0).toString(16).toUpperCase().padStart(8, "0") : null;
+
+  var cells = [];
+  for (var i = 31; i >= 0; i--) {
+    var f = fieldForBit(i);
+    var v = bin.charAt(31 - i);
+    cells.push('<span class="bit t-' + f.tone + (v === "1" ? " on" : "") +
+      '" title="bit ' + i + " — " + esc(f.name) + " = " + v + '"><b>' + v +
+      "</b><i>" + i + "</i></span>");
+  }
+
   var bits = dev.sensor_bits || {};
   var lib = dev.sensor_decoded_by_lib || {};
-  var rows = [
-    ["Bumper", "0–2", bits.bumper_bits_0_2, lib.bumper_state],
-    ["Blade disc", "9–11", bits.blade_bits_9_11, lib.blade_state],
-    ["Ultrasonic left", "12–14", bits.ult_left_bits_12_14, lib.ult_left],
-    ["Ultrasonic left-front", "15–17", bits.ult_left_front_bits_15_17, lib.ult_left_front],
-    ["Ultrasonic right-front", "18–20", bits.ult_right_front_bits_18_20, lib.ult_right_front],
-    ["Ultrasonic right", "21–23", bits.ult_right_bits_21_23, lib.ult_right]
-  ];
+
+  // Blade call-out: bits 11..9 sit at string indices 20..22.
+  var bladeRawV = bits.blade_bits_9_11;
+  var bladeRaw = (bladeRawV === null || bladeRawV === undefined) ? "—" : bladeRawV;
+  var bladeBin = bin.slice(20, 23);
+  var bladeLib = lib.blade_state;
+  var bladeChip = (bladeLib === null || bladeLib === undefined)
+    ? '<span class="chip">blade_state = &mdash;</span>'
+    : '<span class="chip ' + (bladeLib ? "chip-accent" : "") + '">blade_state = <b class="u-mono">' +
+      esc(String(bladeLib)) + "</b></span>";
+
+  // Table rows ascend by bit index — the order the docs list them in.
+  var tableFields = SENSOR_FIELDS.filter(function (f) { return !!f.raw; })
+    .slice().sort(function (a, b) { return a.lo - b.lo; });
+
   el.innerHTML =
-    '<h2>sensor_status <span class="raw">raw ' + esc(dev.sensor_status) + "</span></h2>" +
-    '<div class="bin">' + binHtml + "</div>" +
-    '<p class="dim small" style="margin:0 0 10px">bit 31 &hellip; bit 0 &nbsp;&mdash;&nbsp; ' +
-    '<span class="b-warn">bumper 0&ndash;2</span> &middot; ' +
-    '<span class="b-accent">blade 9&ndash;11</span> &middot; ' +
-    '<span class="b-info">ultrasonics 12&ndash;23</span></p>' +
-    '<div class="scroll"><table class="bits">' +
-    "<tr><th>Field</th><th>Bits</th><th>Raw (0–7)</th><th>Library decode</th></tr>" +
-    rows.map(function (r) {
-      var raw = (r[2] === null || r[2] === undefined) ? "—" : r[2];
-      var dec = (r[3] === null || r[3] === undefined) ? "—" : r[3];
-      return "<tr><td>" + esc(r[0]) + "</td><td>" + esc(r[1]) +
-        '</td><td class="mono">' + esc(raw) + "</td><td>" + esc(dec) + "</td></tr>";
+    sensorHeader('<span class="spacer"></span><span class="chip u-mono">' +
+      (hex ? esc(hex) : "&mdash;") + "</span>") +
+    '<div class="readout">' +
+      '<span class="readout-v">' + esc(dev.sensor_status) + "</span>" +
+      '<span class="u-label">decimal · 32-bit word</span>' +
+    "</div>" +
+    '<div class="bitstrip">' + cells.join("") + "</div>" +
+    '<div class="legend">' +
+      '<span class="lg"><span class="sw sw-bumper"></span>bumper 0&ndash;2</span>' +
+      '<span class="lg"><span class="sw sw-blade"></span>blade disc 9&ndash;11</span>' +
+      '<span class="lg"><span class="sw sw-ult"></span>ultrasonics 12&ndash;23</span>' +
+      '<span class="lg"><span class="sw sw-dim"></span>undocumented</span>' +
+      '<span class="lg u-dim">bit 31 &rarr; bit 0</span>' +
+    "</div>" +
+    '<div class="focus">' +
+      '<div class="focus-col"><span class="u-label">Blade disc · bits 9&ndash;11</span>' +
+        '<span class="focus-v">' + esc(bladeRaw) + " <small>0b" + esc(bladeBin) + "</small></span></div>" +
+      '<div class="focus-col"><span class="u-label">Library decode</span><span>' + bladeChip + "</span></div>" +
+      '<p class="focus-n">The main UI&rsquo;s &ldquo;Blades&rdquo; chip uses the library decode, ' +
+      "which maps <em>any</em> nonzero value of bits 9&ndash;11 to ON. Compare the raw " +
+      "0&ndash;7 value here against what the disc is really doing.</p>" +
+    "</div>" +
+    '<div class="sub-h u-label">Per-field decode</div>' +
+    '<div class="scroll"><table class="tbl bits-t">' +
+    "<tr><th>Field</th><th>Bits</th><th>Raw (0&ndash;7)</th><th>Library decode</th></tr>" +
+    tableFields.map(function (f) {
+      var rv = bits[f.raw];
+      var dv = lib[f.lib];
+      var raw = (rv === null || rv === undefined) ? "—" : rv;
+      var dec = (dv === null || dv === undefined) ? "—" : dv;
+      return '<tr class="' + (f.sw === "blade" ? "row-blade" : "") + '">' +
+        '<td><span class="fname"><span class="sw sw-' + f.sw + '"></span>' + esc(f.name) + "</span></td>" +
+        "<td>" + f.lo + "&ndash;" + f.hi + "</td>" +
+        '<td class="n">' + esc(raw) + "</td>" +
+        "<td>" + esc(dec) + "</td></tr>";
     }).join("") +
-    "</table></div>" +
-    '<p class="dim small" style="margin:10px 0 0">The main UI&rsquo;s &ldquo;Blades&rdquo; chip ' +
-    "uses the library decode, which maps <em>any</em> nonzero value of bits 9&ndash;11 to ON. " +
-    "Compare the raw 0&ndash;7 value here against what the disc is really doing.</p>";
+    "</table></div>";
 }
 
 // ── Live snapshot refresh (every 3 s, pausable) ─────────────────────────────
@@ -378,6 +887,16 @@ function stripSensor(dev) {
   });
   return rest;
 }
+function renderAge(age) {
+  var chip = $("#ageChip");
+  if (age === null || age === undefined) {
+    chip.classList.add("chip-warn");
+    chip.textContent = "never heard from mower";
+  } else {
+    chip.classList.remove("chip-warn");
+    chip.innerHTML = 'last report <b class="u-mono">' + esc(age) + " s</b> ago";
+  }
+}
 async function refresh() {
   if (!mower || paused || inflight) return;
   inflight = true;
@@ -387,19 +906,18 @@ async function refresh() {
     var d = await r.json();
     banner(null);
     renderSensor(d.dev);
-    var age = (d.last_report_age_s === null || d.last_report_age_s === undefined)
-      ? "never heard from mower" : d.last_report_age_s + " s ago";
+    renderAge(d.last_report_age_s);
     var cards = [
       ["Identity", d.identity],
       ["Device", stripSensor(d.dev)],
       ["Work", d.work],
       ["Cutter", d.cutter],
       ["Maintenance", d.maintenance],
-      ["Limits", d.limits],
-      ["Last decoded report", { last_report: age }]
+      ["Limits", d.limits]
     ];
     $("#cards").innerHTML = cards.map(function (c) {
-      return '<section class="card"><h2>' + esc(c[0]) + "</h2>" + kvTable(c[1]) + "</section>";
+      return '<section class="card card-pad"><h2 class="u-label sec-t">' + esc(c[0]) +
+        "</h2>" + kvTable(c[1]) + "</section>";
     }).join("");
   } catch (e) {
     banner("Cannot reach the server: " + e.message);
@@ -410,43 +928,46 @@ async function refresh() {
 setInterval(refresh, 3000);
 
 // ── Capability probe ────────────────────────────────────────────────────────
+// Four statuses, four distinct tones — each legible in light and dark because
+// every one is a theme.css chip variant.
 var BADGE = {
-  "replied": ["replied", "ok"],
-  "sent-no-change": ["sent-no-change", "warn"],
-  "not-in-lib": ["not-in-lib", "mute"],
-  "error": ["error", "err"]
+  "replied": ["replied", "chip-accent"],
+  "sent-no-change": ["sent-no-change", "chip-warn"],
+  "not-in-lib": ["not-in-lib", ""],
+  "error": ["error", "chip-danger"]
 };
 function renderMatrix(probes) {
   var rows = Object.entries(probes || {}).map(function (kv) {
     var cmd = kv[0], p = kv[1];
-    var b = BADGE[p.status] || [p.status || "?", "mute"];
+    var b = BADGE[p.status] || [p.status || "?", ""];
     var extra = "";
     if (p.before !== undefined || p.after !== undefined) {
-      extra = "<details><summary>before / after</summary><pre>" +
+      extra = disclose("before / after", "<pre class='json'>" +
         esc(JSON.stringify({
           before: p.before,
           after: p.after,
           link_alive_during_wait: p.link_alive_during_wait
-        }, null, 1)) + "</pre></details>";
+        }, null, 1)) + "</pre>");
     }
-    return '<tr><td class="mono">' + esc(cmd) + '</td>' +
-      '<td><span class="badge ' + b[1] + '">' + esc(b[0]) + "</span></td>" +
-      "<td>" + esc(p.detail || "") + extra + "</td></tr>";
+    return '<div class="prow"><div class="prow-h"><span class="prow-cmd">' + esc(cmd) +
+      '</span><span class="chip ' + b[1] + '">' + esc(b[0]) + "</span></div>" +
+      (p.detail ? '<p class="prow-d">' + esc(p.detail) + "</p>" : "") +
+      (p.why ? '<p class="prow-w"><b>read-only:</b> ' + esc(p.why) + "</p>" : "") +
+      extra + "</div>";
   }).join("");
-  $("#probeResult").innerHTML = rows
-    ? '<div class="scroll"><table class="matrix">' +
-      "<tr><th>Command</th><th>Status</th><th>Detail</th></tr>" + rows + "</table></div>"
-    : "";
+  $("#probeResult").innerHTML = rows ? '<div class="plist">' + rows + "</div>" : "";
 }
 async function runProbe() {
   if (!mower || busy()) return;
   probing = true;
   var st = $("#probeState");
+  var btn = $("#probeBtn");
+  btn.setAttribute("aria-busy", "true");
   syncButtons();
   var t0 = Date.now();
-  st.textContent = "Probing… (takes ~30 s)";
+  st.textContent = "Probing… (takes ~28 s)";
   var tick = setInterval(function () {
-    st.textContent = "Probing… " + Math.round((Date.now() - t0) / 1000) + " s (takes ~30 s)";
+    st.textContent = "Probing… " + Math.round((Date.now() - t0) / 1000) + " s (takes ~28 s)";
   }, 500);
   try {
     var r = await fetch("/api/diag/" + encodeURIComponent(mower) + "/probe", { method: "POST" });
@@ -463,6 +984,7 @@ async function runProbe() {
   } finally {
     clearInterval(tick);
     probing = false;
+    btn.removeAttribute("aria-busy");
     syncButtons();
   }
 }
@@ -474,12 +996,25 @@ $("#probeBtn").addEventListener("click", runProbe);
 var traceMeta = null;   // {default_seconds, max_seconds, default_value, commands}
 var tracing = false;
 var lastTrace = null;   // the raw response, kept for "Copy result JSON"
+var traceSecs = 12;     // mirrors the segmented control below
 
 function busy() { return probing || tracing; }
 function syncButtons() {
   $("#probeBtn").disabled = busy();
   $("#traceBtn").disabled = busy() || !traceMeta || !mower;
 }
+
+// Seconds picker: a segmented control instead of a select, same payload.
+var secsBtns = Array.prototype.slice.call($("#traceSecs").querySelectorAll("button"));
+function setSecs(v) {
+  traceSecs = v;
+  secsBtns.forEach(function (b) {
+    b.setAttribute("aria-pressed", parseInt(b.dataset.secs, 10) === v ? "true" : "false");
+  });
+}
+secsBtns.forEach(function (b) {
+  b.addEventListener("click", function () { setSecs(parseInt(b.dataset.secs, 10)); });
+});
 
 function traceEntry() {
   if (!traceMeta) return null;
@@ -503,6 +1038,14 @@ async function loadTraceCommands() {
     // "first option wins" — the picker drives which command is sent.
     if (traceMeta.commands.length) $("#traceCmd").value = traceMeta.commands[0].key;
     if (traceMeta.default_value !== undefined) $("#traceVal").value = traceMeta.default_value;
+    // Honour the server's default window when it matches one of the presets,
+    // and never offer one above its cap.
+    secsBtns.forEach(function (b) {
+      var v = parseInt(b.dataset.secs, 10);
+      if (traceMeta.max_seconds && v > traceMeta.max_seconds) b.classList.add("hidden");
+    });
+    var dflt = parseInt(traceMeta.default_seconds, 10);
+    if (secsBtns.some(function (b) { return parseInt(b.dataset.secs, 10) === dflt; })) setSecs(dflt);
     syncTraceCmd();
   } catch (e) {
     $("#traceState").textContent = "Cannot load the command list: " + e.message;
@@ -512,22 +1055,27 @@ async function loadTraceCommands() {
 $("#traceCmd").addEventListener("change", syncTraceCmd);
 
 function fmtVal(v) {
-  if (v === null || v === undefined) return '<span class="dim">&mdash;</span>';
+  if (v === null || v === undefined) return '<span class="u-dim">&mdash;</span>';
   if (typeof v === "object") {
     try { return esc(JSON.stringify(v)); } catch (e) { return esc(String(v)); }
   }
-  if (v === "") return '<span class="dim">(empty)</span>';
+  if (v === "") return '<span class="u-dim">(empty)</span>';
   return esc(v);
 }
 function jsonPre(v) {
   var t;
   try { t = JSON.stringify(v, null, 1); } catch (e) { t = String(v); }
-  return "<pre>" + esc(t) + "</pre>";
+  return '<pre class="json">' + esc(t) + "</pre>";
 }
 
 function renderTrace(d) {
   var out = [];
-  if (d.error) out.push('<div class="banner">Server-side failure: ' + esc(d.error) + "</div>");
+  if (d.error) {
+    out.push('<div class="banner"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>' +
+      '<line x1="12" y1="16" x2="12.01" y2="16"/></svg><span>Server-side failure: ' +
+      esc(d.error) + "</span></div>");
+  }
 
   var sum = d.summary || {};
   var sent = d.sent || {};
@@ -549,9 +1097,10 @@ function renderTrace(d) {
           "change — it received our frame and did not act on it.";
   }
   out.push('<div class="verdict ' + (knife ? "yes" : "no") + '">' +
-    "saw_knife_event: " + (knife ? "YES" : "NO") +
-    ' <span class="dim" style="font-weight:500">(toapp_knife_status_change / DrvKnifeChangeReport)</span>' +
-    '<span class="sub">' + esc(why) + "</span></div>");
+    (knife ? ICO.ok : ICO.bad) +
+    '<div><div class="verdict-t">saw_knife_event: ' + (knife ? "YES" : "NO") +
+    " <small>(toapp_knife_status_change / DrvKnifeChangeReport)</small></div>" +
+    '<span class="verdict-s">' + esc(why) + "</span></div></div>");
 
   var head = [
     ["sent", sent.command + (sent.args && Object.keys(sent.args).length
@@ -561,24 +1110,25 @@ function renderTrace(d) {
       (sum.dropped_messages ? " (+" + sum.dropped_messages + " dropped over the cap)" : "")]
   ];
   if (sent.error) head.push(["send error", sent.error]);
-  out.push('<div class="scroll"><table class="kv">' + head.map(function (r) {
+  out.push('<div class="scroll"><table class="tbl kv">' + head.map(function (r) {
     return "<tr><td>" + esc(r[0]) + "</td><td>" + fmtVal(r[1]) + "</td></tr>";
   }).join("") + "</table></div>");
 
   var byType = sum.by_type || {};
   var types = Object.keys(byType);
   if (types.length) {
-    out.push('<div class="sub-h">Message types</div><div>' + types.map(function (t) {
-      return '<span class="badge mute" style="margin:0 6px 6px 0">' +
-        esc(t) + " &times;" + esc(byType[t]) + "</span>";
-    }).join("") + "</div>");
+    out.push('<div class="sub-h u-label">Message types</div><div class="typechips">' +
+      types.map(function (t) {
+        return '<span class="chip"><span class="u-mono">' + esc(t) +
+          '</span><span class="n">&times;' + esc(byType[t]) + "</span></span>";
+      }).join("") + "</div>");
   }
 
   var diff = d.state_diff || {};
   var paths = Object.keys(diff);
   if (paths.length) {
-    out.push('<div class="sub-h">State before &rarr; after</div>' +
-      '<div class="scroll"><table class="diff">' +
+    out.push('<div class="sub-h u-label">State before &rarr; after</div>' +
+      '<div class="scroll"><table class="tbl diff">' +
       "<tr><th>Path</th><th>Before</th><th>After</th></tr>" +
       paths.map(function (p) {
         var row = diff[p] || {};
@@ -587,17 +1137,18 @@ function renderTrace(d) {
           '<td class="v">' + fmtVal(row.before) + "</td>" +
           '<td class="v">' + fmtVal(row.after) + "</td></tr>";
       }).join("") + "</table></div>" +
-      '<p class="dim small" style="margin:8px 0 0">Highlighted rows changed during ' +
+      '<p class="hint" style="margin:8px 0 0">Highlighted rows changed during ' +
       "the window. An unchanged row is not proof of nothing happening &mdash; a value " +
       "the mower never re-reports stays frozen at whatever it last sent.</p>");
   }
 
   var msgs = d.messages || [];
-  out.push('<div class="sub-h">Timeline (' + msgs.length + " frames, t = ms after the command was sent)</div>");
+  out.push('<div class="sub-h u-label">Timeline (' + msgs.length +
+    " frames, t = ms after the command was sent)</div>");
   if (!msgs.length) {
-    out.push('<p class="dim small">No messages arrived during the window.</p>');
+    out.push('<p class="hint">No messages arrived during the window.</p>');
   } else {
-    out.push('<div class="tlwrap"><table class="tl">' +
+    out.push('<div class="tlwrap"><table class="tbl tl">' +
       "<tr><th>t</th><th>Type</th><th>Summary</th></tr>" +
       msgs.map(function (m) {
         var isKnife = /knife/i.test(m.sub_message_type || "");
@@ -606,12 +1157,12 @@ function renderTrace(d) {
           '<td class="t">' + (t >= 0 ? "+" : "") + esc(t) + " ms</td>" +
           '<td class="ty">' + esc(m.sub_message_type) + "</td>" +
           '<td class="s">' + esc(m.summary || "") +
-          "<details><summary>full JSON</summary>" +
-          jsonPre({ envelope: m.envelope, fields: m.fields }) + "</details></td></tr>";
+          disclose("full JSON", jsonPre({ envelope: m.envelope, fields: m.fields })) +
+          "</td></tr>";
       }).join("") + "</table></div>");
   }
 
-  if (d.note) out.push('<p class="dim small" style="margin:12px 0 0">' + esc(d.note) + "</p>");
+  if (d.note) out.push('<p class="hint" style="margin:12px 0 0">' + esc(d.note) + "</p>");
   $("#traceResult").innerHTML = out.join("");
   $("#copyTrace").classList.remove("hidden");
 }
@@ -621,9 +1172,11 @@ async function runTrace() {
   var e = traceEntry();
   if (!e) return;
   tracing = true;
+  var btn = $("#traceBtn");
+  btn.setAttribute("aria-busy", "true");
   syncButtons();
   var st = $("#traceState");
-  var secs = parseInt($("#traceSecs").value, 10) || traceMeta.default_seconds || 12;
+  var secs = traceSecs || traceMeta.default_seconds || 12;
   var body = { command: e.key, seconds: secs };
   if (e.takes_value) body.value = parseInt($("#traceVal").value, 10) || traceMeta.default_value;
   var left = secs;
@@ -658,6 +1211,7 @@ async function runTrace() {
   } finally {
     clearInterval(tick);
     tracing = false;
+    btn.removeAttribute("aria-busy");
     syncButtons();
   }
 }
@@ -669,6 +1223,7 @@ $("#traceBtn").addEventListener("click", runTrace);
 $("#copyTrace").addEventListener("click", async function () {
   if (!lastTrace) return;
   var btn = $("#copyTrace");
+  var label = $("#copyTraceLabel");
   var text = JSON.stringify(lastTrace, null, 2);
   var ok = false;
   try {
@@ -688,8 +1243,12 @@ $("#copyTrace").addEventListener("click", async function () {
     try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
     document.body.removeChild(ta);
   }
-  btn.textContent = ok ? "Copied!" : "Copy failed — select the JSON manually";
-  setTimeout(function () { btn.textContent = "Copy result JSON"; }, 2000);
+  label.textContent = ok ? "Copied!" : "Copy failed — select the JSON manually";
+  btn.classList.add(ok ? "flash-ok" : "flash-fail");
+  setTimeout(function () {
+    label.textContent = "Copy result JSON";
+    btn.classList.remove("flash-ok", "flash-fail");
+  }, 2000);
 });
 
 loadMowers();
