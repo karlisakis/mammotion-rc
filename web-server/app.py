@@ -665,7 +665,8 @@ async def _send_blades(h, name: str, on: bool) -> str:
     HA integration makes.  This matters: on a Luba-VA/HM442 the equivalent
     Luba-1 command for *cutting height* was accepted and silently ignored
     (docs/blade-height-findings.md), so the Luba-1 blade command is very
-    probably a no-op on these models too.
+    probably a no-op on these models too.  Both paths confirmed working on
+    hardware (Luba-VA/HM442) after this change.
 
     DrvMowCtrlByHand carries the height alongside the blade control, so we pass
     the mower's current height to avoid moving the deck as a side effect.

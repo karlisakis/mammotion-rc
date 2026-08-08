@@ -124,13 +124,18 @@ Excluded before testing: value clamped by our own code (the log shows what was
 applied); command lost on the wire (cutter mode proves the path works); NAV
 misrouting (`LUBA_VA` classifies correctly, rank 15 > Luba-2 gate).
 
-## Implication for blade on/off
+## Blade on/off — same split, same fix (confirmed)
 
-Blade start/stop has the same split upstream, and our code used the **Luba-1**
-`set_blade_control` path — so on this model it is likely a no-op for the same
-reason the height command was. Both now route through `operate_on_device` on
-Luba-2-and-newer devices. Unlike height, this was **not** verified from here:
-spinning blades on an unattended mower is not something to test remotely.
+Blade start/stop had the identical Luba-1/Luba-2 split, and our code used the
+**Luba-1** `set_blade_control` path — a silent no-op on this model, for the same
+reason the Luba-1-style height command was. Both now route through
+`operate_on_device` → `DrvMowCtrlByHand` on Luba-2-and-newer devices, passing
+the mower's current height so toggling blades never moves the deck as a side
+effect.
+
+**Confirmed working on hardware by the owner (2026-08-08)** — supervised, since
+spinning blades is not something to verify remotely. Cutting height was
+confirmed in the same session.
 
 ## How to test
 
