@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import os
 import socket
@@ -109,6 +110,158 @@ def _stick_percent(magnitude: float, ceiling: float) -> float:
     span = max(ceiling - DEAD_ZONE, 1e-6)
     return ((m - DEAD_ZONE) / span) * JOYSTICK_TOP_PERCENT
 
+# ── Control priority over the single BLE link ────────────────────────────────
+# EVERYTHING this server sends to a mower — joystick frames, watchdog probes,
+# blade-height read-backs, pymammotion's own 5 s todev_ble_sync and its report
+# stream — funnels through ONE TCP socket to the HC33, serialised by
+# HC33ProxyTransport._send_lock, and from there through ONE BLE link.  That lock
+# is a plain FIFO asyncio.Lock: whoever asks first goes first.  When the HC33's
+# BLE TX buffers fill it stops reading the socket (see firmware tcp_proxy.cpp
+# try_write_pending_), TCP backpressures us, and the write in flight sits in
+# `drain()` holding the lock for as long as the stall lasts.  Every telemetry
+# probe that slipped in front of a joystick frame therefore *adds* to that
+# frame's age — and a joystick frame is worthless once it is stale, unlike a
+# telemetry probe which is merely late.
+#
+# Two mechanisms, both additive (hc33_proxy.py is untouched):
+#   1. `_DRIVING_UNTIL` — while the stick is held, telemetry probes stand down
+#      entirely (see _watchdog / _height_readback).  Cheapest possible fix: the
+#      probe that never happens can never delay anything.
+#   2. `_PriorityHC33Transport` — a send-ordering gate in front of the inherited
+#      lock.  A telemetry send waits (briefly, bounded) for any control send
+#      that is already queued, so probes can never stack up ahead of a joystick
+#      frame that is already waiting.
+#
+# Set on the joystick sender task only; contextvars are copied per-task, so
+# every send made by that task is tagged control and nothing else is.
+_CONTROL_SEND: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "luba_control_send", default=False
+)
+
+# Monotonic deadline per mower: while now < deadline, the stick is considered
+# held.  Refreshed on every joystick frame; ~8 missed 150 ms frames of slack so
+# a brief link stall doesn't let a probe burst in mid-drive.
+_DRIVING_UNTIL: dict[str, float] = {}
+_DRIVE_HOLD_S = 1.2
+
+
+def _is_driving(name: str) -> bool:
+    """True while a joystick stick is being held for *name*."""
+    return time.monotonic() < _DRIVING_UNTIL.get(name, 0.0)
+
+
+class _LinkStats:
+    """Per-mower BLE send accounting.  Plain counters, no allocation per send.
+
+    Read by /api/diag/{name} ("link_tx") and summarised into a single log line
+    at most once a minute — and only when there was something worth saying, so
+    an idle server stays silent in the add-on's ~100-line log buffer.
+    """
+
+    __slots__ = (
+        "control_frames", "telemetry_frames", "control_ms_max", "control_ms_sum",
+        "telemetry_ms_max", "slow_sends", "telemetry_yields", "stale_dropped",
+        "send_errors",
+    )
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.control_frames = 0      # joystick frames actually put on the wire
+        self.telemetry_frames = 0    # probes / keep-alives / report requests
+        self.control_ms_max = 0.0    # worst lock-wait + write + drain, control
+        self.control_ms_sum = 0.0
+        self.telemetry_ms_max = 0.0
+        self.slow_sends = 0          # sends over _SLOW_SEND_MS (link congested)
+        self.telemetry_yields = 0    # probes that deferred to a waiting control frame
+        self.stale_dropped = 0       # joystick frames superseded before they were sent
+        self.send_errors = 0
+
+    def snapshot(self) -> dict:
+        n = self.control_frames
+        return {
+            "control_frames":    n,
+            "telemetry_frames":  self.telemetry_frames,
+            "control_ms_avg":    round(self.control_ms_sum / n, 1) if n else None,
+            "control_ms_max":    round(self.control_ms_max, 1),
+            "telemetry_ms_max":  round(self.telemetry_ms_max, 1),
+            "slow_sends":        self.slow_sends,
+            "telemetry_yields":  self.telemetry_yields,
+            "stale_dropped":     self.stale_dropped,
+            "send_errors":       self.send_errors,
+        }
+
+
+# A single send taking longer than this means the link is congested: the HC33 is
+# backpressuring us or the BLE write is stalled.  25 ms is the measured idle
+# round-trip for a whole HTTP-plus-BLE command POST, so 150 ms (one joystick
+# repeat interval) is comfortably past "normal" without tripping on jitter.
+_SLOW_SEND_MS = 150.0
+
+
+class _PriorityHC33Transport(HC33ProxyTransport):
+    """HC33ProxyTransport plus control-priority send ordering and accounting.
+
+    Purely additive: the base class, its single socket and its ``_send_lock``
+    are untouched.  This subclass only decides *who queues on that lock first*
+    and measures how long each send takes.
+
+    A telemetry send that arrives while a control (joystick) send is already
+    waiting defers for up to ``_CONTROL_YIELD_S``.  The wait is bounded so a
+    wedged control send can never starve the keep-alives the firmware's 30 s
+    idle timeout depends on — worst case telemetry is 600 ms late, which for a
+    6 s light probe or a 5 s keep-alive is free.
+    """
+
+    _CONTROL_YIELD_S = 0.6
+
+    def __init__(self, device_id: str, host: str, port: int) -> None:
+        super().__init__(device_id=device_id, host=host, port=port)
+        self.stats = _LinkStats()
+        self._control_inflight = 0
+        self._control_idle = asyncio.Event()
+        self._control_idle.set()
+
+    async def send(self, payload: bytes, iot_id: str = "", firmware_version: str = "1.0.0.0") -> None:
+        control = _CONTROL_SEND.get()
+        if control:
+            self._control_inflight += 1
+            self._control_idle.clear()
+        elif not self._control_idle.is_set():
+            self.stats.telemetry_yields += 1
+            with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
+                await asyncio.wait_for(self._control_idle.wait(), self._CONTROL_YIELD_S)
+        t0 = time.monotonic()
+        try:
+            await super().send(payload, iot_id=iot_id, firmware_version=firmware_version)
+        except Exception:
+            self.stats.send_errors += 1
+            raise
+        finally:
+            ms = (time.monotonic() - t0) * 1000.0
+            st = self.stats
+            if ms > _SLOW_SEND_MS:
+                st.slow_sends += 1
+            if control:
+                st.control_frames += 1
+                st.control_ms_sum += ms
+                if ms > st.control_ms_max:
+                    st.control_ms_max = ms
+                self._control_inflight -= 1
+                if self._control_inflight <= 0:
+                    self._control_idle.set()
+            else:
+                st.telemetry_frames += 1
+                if ms > st.telemetry_ms_max:
+                    st.telemetry_ms_max = ms
+
+
+def _link_stats(name: str) -> "_LinkStats | None":
+    """Send counters for *name*, or None if its transport predates this class."""
+    return getattr(state.transports.get(name), "stats", None)
+
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 class State:
     handles:    dict[str, DeviceHandle] = {}
@@ -125,6 +278,13 @@ class State:
     auto_gave_up:   dict[str, bool] = {}        # True after retries exhausted — manual reconnect required
     manual_op:      dict[str, bool] = {}        # True while /api/reconnect is running, suppresses watchdog
     watchdog_tasks: dict[str, asyncio.Task] = {}
+    # Monotonic timestamp of the last /api/status poll per mower.  The watchdog's
+    # headlight/cutter probes exist only to feed that endpoint, so when nobody is
+    # polling there is nothing to feed and the probes are pure BLE chatter.
+    last_status_poll: dict[str, float] = {}
+    # One in-flight blade-height read-back per mower; a new set cancels the old.
+    readback_tasks: dict[str, asyncio.Task] = {}
+    error_table_fetching: bool = False           # background cloud error-table fetch in flight
     # Open joystick WebSockets, tracked so the lifespan shutdown can close them.
     # Without this, uvicorn hangs in "Waiting for connections to close" because
     # the joystick handler blocks forever in ws.receive_json() until the browser
@@ -179,16 +339,47 @@ async def _auto_reconnect(name: str) -> None:
         state.auto_retrying[name] = False
 
 
+# Watchdog probe cadences (seconds).  Deliberately expressed as monotonic
+# deadlines rather than tick counts: a tick-modulo schedule drifts by however
+# long the awaited probes took, and it cannot express "skip this one, run it as
+# soon as the stick is released".
+_LIGHT_PROBE_S = 6.0    # get_car_light + get_cutter_mode
+_ERROR_PROBE_S = 60.0   # get_error_code + get_error_timestamp
+# How stale the last /api/status poll may be before we treat the UI as gone and
+# stop probing for it.  The client polls every 3 s, so 30 s is ten missed polls.
+_WATCHER_IDLE_S = 30.0
+# How often the link-traffic summary may be logged, per mower.
+_STATS_LOG_S = 60.0
+
+
 async def _watchdog(name: str) -> None:
     """Watch one transport for unexpected drops and fire the retry sequence.
 
     Triggers only on a CONNECTED → DISCONNECTED transition.  Skips while
     `manual_op` is set (the /api/reconnect handler owns the lifecycle in that
     window) and while a retry sequence is already running.
+
+    Also carries the periodic telemetry probes (headlight/cutter, fault log).
+    Those are gated three ways so they cannot congest the link or starve
+    joystick frames:
+
+      * NEVER while the stick is held (`_is_driving`) — the probe is simply
+        deferred and fires on the first tick after the stick is released, so
+        the UI is at most ~2 s behind rather than competing with control.
+      * The light/cutter probe only runs while something is actually polling
+        /api/status.  With no UI open it feeds nothing, and skipping it takes
+        the at-rest chatter down by 20 frames/min.
+      * The fault-log probe still runs unattended (it is 2 frames/min and it is
+        what makes a fault visible the moment a page is opened), but it too
+        stands down while driving.
     """
     t = state.transports[name]
     last = t.availability
-    ticks = 0
+    # -inf → "due immediately", preserving the old behaviour where the first
+    # fault poll landed ~2 s after connect and the status chip had data at once.
+    last_light_probe = float("-inf")
+    last_error_probe = float("-inf")
+    last_stats_log = time.monotonic()
     while True:
         try:
             await asyncio.sleep(2.0)
@@ -206,13 +397,18 @@ async def _watchdog(name: str) -> None:
                 _LOGGER.warning("watchdog %s: unexpected drop — starting auto-reconnect", name)
                 asyncio.create_task(_auto_reconnect(name), name=f"auto-reconnect-{name}")
             last = current
-            # Refresh the headlight state every ~6 s while connected.  The mower
-            # auto-offs the light after a while and only a get_car_light response
-            # updates lamp_info, so we actively re-probe; the answer lands async
-            # and /api/status serves it on the next poll.  Piggybacking the 2 s
-            # watchdog tick avoids a second timer.
-            ticks += 1
-            if current == TransportAvailability.CONNECTED and ticks % 3 == 0:
+            now = time.monotonic()
+
+            connected = current == TransportAvailability.CONNECTED
+            driving = _is_driving(name)
+            watched = (now - state.last_status_poll.get(name, 0.0)) < _WATCHER_IDLE_S
+
+            # Refresh the headlight state every ~6 s.  The mower auto-offs the
+            # light after a while and only a get_car_light response updates
+            # lamp_info, so we actively re-probe; the answer lands async and
+            # /api/status serves it on the next poll.
+            if connected and not driving and watched and now - last_light_probe >= _LIGHT_PROBE_S:
+                last_light_probe = now
                 h = state.handles.get(name)
                 if h is not None:
                     with contextlib.suppress(Exception):
@@ -224,14 +420,33 @@ async def _watchdog(name: str) -> None:
             # Refresh the fault log every ~60 s (HA polls get_errors at the same
             # cadence).  The device only populates errors.err_code_list in reply
             # to get_error_code, so without this the buffer stays empty and no
-            # fault ever shows.  ticks%30==1 → first poll ~2 s after connect, so
-            # the status chip has data almost immediately.
-            if current == TransportAvailability.CONNECTED and ticks % 30 == 1:
+            # fault ever shows.
+            if connected and not driving and now - last_error_probe >= _ERROR_PROBE_S:
+                last_error_probe = now
                 h = state.handles.get(name)
                 if h is not None:
                     with contextlib.suppress(Exception):
                         await h.send_raw(h.commands.get_error_code())
                         await h.send_raw(h.commands.get_error_timestamp())
+
+            # One traffic line a minute, and only when there was traffic worth
+            # reporting — the add-on's log buffer is ~100 lines, so an idle
+            # server must stay silent.
+            if now - last_stats_log >= _STATS_LOG_S:
+                last_stats_log = now
+                st = _link_stats(name)
+                if st is not None and (st.control_frames or st.slow_sends or st.send_errors):
+                    _LOGGER.info(
+                        "link %s: %d control + %d telemetry frames/min, "
+                        "control send avg %.0f ms max %.0f ms, %d slow (>%.0f ms), "
+                        "%d stale joystick frames dropped, %d telemetry yields, %d errors",
+                        name, st.control_frames, st.telemetry_frames,
+                        (st.control_ms_sum / st.control_frames) if st.control_frames else 0.0,
+                        st.control_ms_max, st.slow_sends, _SLOW_SEND_MS,
+                        st.stale_dropped, st.telemetry_yields, st.send_errors,
+                    )
+                if st is not None:
+                    st.reset()
         except Exception:  # noqa: BLE001
             _LOGGER.exception("watchdog %s tick crashed", name)
 
@@ -244,7 +459,9 @@ async def _build_and_connect(cfg: dict) -> None:
     a later Reconnect (or auto-reconnect) can recover without a server restart.
     """
     name = cfg["name"]
-    transport = HC33ProxyTransport(device_id=name, host=cfg["hc33_host"], port=cfg["hc33_port"])
+    # _PriorityHC33Transport is HC33ProxyTransport + control-priority send
+    # ordering and send accounting; the wire protocol is byte-identical.
+    transport = _PriorityHC33Transport(device_id=name, host=cfg["hc33_host"], port=cfg["hc33_port"])
     handle = DeviceHandle(
         device_id=name,
         device_name=name,
@@ -271,6 +488,9 @@ async def _teardown_all(*, close_ws: bool) -> None:
         for ws in list(state.websockets):
             with contextlib.suppress(Exception):
                 await ws.close(code=1001, reason="server reconfigured")
+    for task in state.readback_tasks.values():
+        task.cancel()
+    state.readback_tasks.clear()
     for task in state.watchdog_tasks.values():
         task.cancel()
     for task in state.watchdog_tasks.values():
@@ -288,6 +508,8 @@ async def _teardown_all(*, close_ws: bool) -> None:
     state.auto_retrying.clear()
     state.auto_gave_up.clear()
     state.manual_op.clear()
+    state.last_status_poll.clear()
+    _DRIVING_UNTIL.clear()
 
 
 async def _apply_mowers(new_mowers: list[dict]) -> None:
@@ -324,10 +546,39 @@ def _primary_lan_ip() -> "str | None":
             return None
 
 
+# Paths whose uvicorn access-log lines are dropped.  The HA add-on's log buffer
+# is only ~100 lines; /api/status (every 3 s) and /api/heading (every 1 s while
+# the camera is open) alone overflow it in well under a minute, burying the
+# warnings that actually matter.  Errors are still logged by their own handlers
+# — this only silences the one-line-per-request access log for the polls.
+# /ws/joystick is deliberately NOT in the list: it is one line per connection,
+# and a 403 there is exactly the kind of thing you need to see.
+_QUIET_ACCESS_PATHS = ("/api/status/", "/api/heading/", "/static/")
+
+
+class _QuietAccessLog(logging.Filter):
+    """Drop uvicorn access lines for the high-frequency polling endpoints.
+
+    uvicorn logs access as ``'%s - "%s %s HTTP/%s" %d' % (client, method, path,
+    version, status)`` — so args[2] is the request path.  Anything that doesn't
+    match that shape is passed through untouched.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 3:
+            return True
+        path = args[2]
+        if not isinstance(path, str):
+            return True
+        return not path.startswith(_QUIET_ACCESS_PATHS)
+
+
 # ── Lifespan: build BLE-only handles, connect transports ─────────────────────
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("uvicorn.access").addFilter(_QuietAccessLog())
     if not MOWERS:
         _LOGGER.info("no mowers configured — starting in onboarding mode")
     for cfg in MOWERS:
@@ -1052,12 +1303,29 @@ async def post_setting(name: str, setting: str, payload: dict = Body(...)):
         # The height motor takes seconds to travel, and /api/status only reads
         # the cached snapshot — ask the mower for fresh reports so the readback
         # reflects reality instead of a pre-change value.
+        #
+        # Two guards, both about not congesting the single BLE link:
+        #   * ONE read-back in flight per mower.  Dragging the height slider
+        #     posts repeatedly, and each post used to spawn its own task — three
+        #     report requests apiece, overlapping, all on the same lock.  A new
+        #     set cancels the old; the last set is the one worth reading back.
+        #   * A tick is skipped outright while the stick is held.  A report
+        #     request is a multi-frame exchange (RPT_START plus a verification
+        #     wait, with a ble_sync prefixed on retry) and is exactly the kind
+        #     of telemetry that must never sit in front of a joystick frame.
         async def _height_readback() -> None:
             for delay in (1.0, 4.0, 7.0):
                 await asyncio.sleep(delay)
+                if _is_driving(name):
+                    continue
                 with contextlib.suppress(Exception):
                     await h.request_report_snapshot()
-        asyncio.create_task(_height_readback(), name=f"blade-readback-{name}")
+        prev = state.readback_tasks.get(name)
+        if prev is not None and not prev.done():
+            prev.cancel()
+        state.readback_tasks[name] = asyncio.create_task(
+            _height_readback(), name=f"blade-readback-{name}"
+        )
     elif setting == "speed":
         lo, hi = (limits["working_speed"]["min"], limits["working_speed"]["max"]) if limits else (0.2, 0.6)
         v = round(min(max(value, lo), hi), 2)
@@ -1153,22 +1421,39 @@ def _last_error(h) -> int:
     return max(pairs)[1]  # code with the newest timestamp
 
 
-async def _error_table() -> dict:
-    """Cloud-fetched {code: ErrorInfo} table used to turn numeric mower fault
-    codes into the same human text the Mammotion app / HA shows.  The device
-    only sends numeric codes over BLE; the text lives in a CSV the cloud serves
-    (MammotionHTTP.get_all_error_codes).  Fetched once and cached; returns {}
-    (and caches it) when cloud login isn't configured or the fetch fails, so the
-    UI degrades to bare numeric codes rather than erroring."""
-    if state.error_codes is not None:
-        return state.error_codes
+async def _fetch_error_table() -> None:
+    """Background one-shot fetch of the cloud error-code table."""
     try:
         http = await _ensure_http()
         state.error_codes = await http.get_all_error_codes()
     except Exception as exc:  # no cloud creds, network blip, or API change
         _LOGGER.info("error-code table unavailable, showing numeric codes: %s", exc)
         state.error_codes = {}
-    return state.error_codes
+    finally:
+        state.error_table_fetching = False
+
+
+async def _error_table() -> dict:
+    """Cloud-fetched {code: ErrorInfo} table used to turn numeric mower fault
+    codes into the same human text the Mammotion app / HA shows.  The device
+    only sends numeric codes over BLE; the text lives in a CSV the cloud serves
+    (MammotionHTTP.get_all_error_codes).  Fetched once and cached; caches {} when
+    cloud login isn't configured or the fetch fails, so the UI degrades to bare
+    numeric codes rather than erroring.
+
+    The very first fetch is a full cloud login plus a CSV download — seconds of
+    latency.  It used to run *inline inside /api/status*, so the first fault
+    reported while driving stalled the status poll (and, with a hot event loop,
+    everything queued behind it) for as long as the cloud took to answer.  It is
+    now kicked off in the background and this returns {} until it lands: the UI
+    shows the bare numeric code for one poll cycle instead of hanging.
+    """
+    if state.error_codes is not None:
+        return state.error_codes
+    if not state.error_table_fetching:
+        state.error_table_fetching = True
+        asyncio.create_task(_fetch_error_table(), name="error-table-fetch")
+    return {}
 
 
 def _lookup_error(code: int, table: dict) -> "str | None":
@@ -1204,6 +1489,10 @@ async def status(name: str):
     _cfg(name)
     t = state.transports[name]
     h = state.handles[name]
+    # Mark the UI as watching.  The watchdog's headlight/cutter probe exists only
+    # to populate this response, so with nobody polling it is pure BLE chatter
+    # and is skipped (see _watchdog).  Cheap: one dict write per poll, no BLE.
+    state.last_status_poll[name] = time.monotonic()
     last = h.last_report_at  # monotonic seconds, 0.0 if never
     silent_s = None if last == 0.0 else max(0.0, time.monotonic() - last)
     # Battery telemetry from the last decoded report.  Same access path handle.py
@@ -1476,6 +1765,23 @@ async def diag(name: str):
         )
     except Exception:  # noqa: BLE001
         out["last_report_age_s"] = None
+
+    # BLE send accounting for the current ~60 s window (reset by the watchdog
+    # each time it logs a summary).  This is what makes joystick starvation
+    # measurable instead of guessed at: `control_ms_max` is the worst
+    # lock-wait + write + drain a joystick frame saw, `slow_sends` counts sends
+    # past _SLOW_SEND_MS (link backpressured), `stale_dropped` counts joystick
+    # frames superseded by a newer one before they could be sent.
+    try:
+        st = _link_stats(name)
+        out["link_tx"] = None if st is None else {
+            **st.snapshot(),
+            "window_s": _STATS_LOG_S,
+            "slow_send_ms": _SLOW_SEND_MS,
+            "driving": _is_driving(name),
+        }
+    except Exception as exc:  # noqa: BLE001
+        out["link_tx"] = {"error": str(exc)}
     return out
 
 
@@ -2616,8 +2922,45 @@ async def onboard_save(payload: dict = Body(...)):
 
 
 # ── WebSocket: joystick + server-side dead-man ───────────────────────────────
+# Sentinel for "the stick is centered" as a pending command, kept distinct from
+# None ("nothing pending") — transform_both_speeds can itself return None, so a
+# None-means-stop encoding would be ambiguous.
+_STICK_STOP = object()
+
+
 @app.websocket("/ws/joystick/{name}")
 async def joystick_ws(ws: WebSocket, name: str):
+    """Joystick control socket.
+
+    The receive loop and the BLE send are DELIBERATELY decoupled, and this is
+    the single most important latency property of the whole path.
+
+    A joystick frame is a real-time control input: only the newest one has any
+    value.  The browser sends one every 150 ms while the stick is held (the
+    mower self-limits and coasts to a stop if commands stop arriving, so that
+    repeat is a safety requirement, not a nicety).  Each frame goes out over one
+    TCP socket to the HC33, serialised behind HC33ProxyTransport's single
+    `_send_lock`, and the HC33 stops reading that socket whenever the mower's
+    BLE TX buffers are full — so a send can sit in `drain()` for hundreds of ms.
+
+    Sending inline from the receive loop (what this used to do) makes that
+    stall self-amplifying: while the handler is blocked in `send_raw` it is not
+    calling `receive_json`, so the browser's frames pile up in the ASGI receive
+    queue.  When the send finally completes the handler drains that queue in
+    order — replaying stick positions from seconds ago, one blocking send at a
+    time.  If the link's sustainable frame rate ever dips below 6.5/s the
+    backlog never clears and the lag grows without bound.  That is exactly the
+    reported "insane delay", and it also explains the intermittency: it only
+    bites once the link stalls even briefly.
+
+    So: the receive loop NEVER blocks on BLE.  It decodes the frame, overwrites
+    a single-slot "latest commanded state", and loops.  A dedicated sender task
+    takes whatever is in that slot and sends it; frames superseded while a send
+    was in flight are dropped, not queued.  The send rate is therefore exactly
+    as fast as the link allows and always carries the *current* stick position.
+    Safety is preserved and improved: commands keep flowing while the stick is
+    held (so the self-limit stays fed), and a stale direction is never sent.
+    """
     await ws.accept()
     h = state.handles.get(name)
     if h is None:
@@ -2625,16 +2968,76 @@ async def joystick_ws(ws: WebSocket, name: str):
         return
     state.websockets.add(ws)
 
-    stopped = True   # nothing in motion yet
-    lock = asyncio.Lock()
+    # Single-slot mailbox: _STICK_STOP, an (x, y) pair, or None for "empty".
+    # Raw axes, not a built command — deriving the speeds and serialising the
+    # protobuf for a frame that is about to be superseded is wasted work, so
+    # that happens in the sender, once, for the frame that is actually sent.
+    pending: object = None
+    have_new = asyncio.Event()
+    stats = _link_stats(name)
 
-    async def send_stop():
-        nonlocal stopped
-        async with lock:
-            if not stopped:
-                await h.send_raw(h.commands.stop_and_not_save_task())
-                stopped = True
+    async def _sender() -> None:
+        nonlocal pending
+        # Tags every send made by this task as control, so telemetry probes on
+        # the same transport yield to it instead of queueing ahead of it.
+        # contextvars are per-task copies — nothing else is affected.
+        _CONTROL_SEND.set(True)
+        stopped = True   # nothing in motion yet
+        while True:
+            await have_new.wait()
+            have_new.clear()
+            cmd, pending = pending, None
+            if cmd is None:
+                continue
+            try:
+                if cmd is _STICK_STOP:
+                    if not stopped:
+                        await h.send_raw(h.commands.stop_and_not_save_task())
+                        stopped = True
+                    continue
+                x, y = cmd  # type: ignore[misc]
+                # Combined linear + angular in ONE command so forward and
+                # turning happen simultaneously (arc / diagonal), like the
+                # official app — DrvMotionCtrl carries both speeds.  Feeding
+                # both axes through the mower's own transform keeps the scaling
+                # identical to the old single-axis helpers (linear + = fwd,
+                # angular + = right).
+                speeds = transform_both_speeds(
+                    90.0 if y >= 0 else 270.0,   # forward / back
+                    0.0 if x >= 0 else 180.0,    # right / left
+                    _stick_percent(abs(y), MAX_LINEAR),
+                    _stick_percent(abs(x), MAX_ANGULAR),
+                )
+                if speeds is None:      # transform declined to produce a vector
+                    continue
+                linear_speed, angular_speed = speeds
+                # Set BEFORE the await: if this send is cancelled or fails
+                # mid-flight the mower may well have got it, so the disconnect
+                # path must still consider a stop necessary.
+                stopped = False
+                await h.send_raw(
+                    h.commands.send_movement(
+                        linear_speed=linear_speed, angular_speed=angular_speed
+                    )
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                # A dropped link must not kill the sender.  Previously any send
+                # error propagated out of the handler and closed the joystick
+                # socket, so one transient blip cost the user the whole stick
+                # until they re-selected the mower — part of the "works
+                # intermittently" report.  The transport reconnects on the next
+                # send instead.  Safety is unaffected: while sends are failing
+                # the mower receives nothing and coasts to its own stop.
+                # The failure is already counted in _LinkStats.send_errors.
+                _LOGGER.debug("joystick send failed for %s", name, exc_info=True)
+                # Short backoff so a hard-down link is retried a few times a
+                # second rather than at the browser's frame rate.  Never taken
+                # on a healthy link.
+                await asyncio.sleep(0.25)
 
+    sender = asyncio.create_task(_sender(), name=f"joystick-tx-{name}")
     try:
         while True:
             data = await ws.receive_json()
@@ -2647,37 +3050,31 @@ async def joystick_ws(ws: WebSocket, name: str):
             # Stick forward → move_forward; stick back → move_back.  Names match
             # actual mower motion — the Stage-1 "inversion" memory was wrong.
             if force < DEAD_ZONE:
-                await send_stop()
-                continue
-
-            stopped = False
-            # Combined linear + angular in ONE command so forward and turning
-            # happen simultaneously (arc / diagonal), like the official app —
-            # DrvMotionCtrl carries both speeds.  Previously we picked a single
-            # axis (abs(y) >= abs(x)) and the move_* helpers zeroed the other,
-            # so you could only go straight OR turn.  Feeding both axes through
-            # the mower's own transform keeps the scaling identical to the old
-            # single-axis helpers (linear + = fwd, angular + = right).
-            lp = _stick_percent(abs(y), MAX_LINEAR)
-            ap = _stick_percent(abs(x), MAX_ANGULAR)
-            linear_speed, angular_speed = transform_both_speeds(
-                90.0 if y >= 0 else 270.0,   # forward / back
-                0.0 if x >= 0 else 180.0,    # right / left
-                lp, ap,
-            )
-            async with lock:
-                await h.send_raw(
-                    h.commands.send_movement(
-                        linear_speed=linear_speed, angular_speed=angular_speed
-                    )
-                )
+                _DRIVING_UNTIL.pop(name, None)   # telemetry probes may resume
+                pending = _STICK_STOP
+            else:
+                # Hold off every telemetry probe while the stick is held.
+                _DRIVING_UNTIL[name] = time.monotonic() + _DRIVE_HOLD_S
+                pending = (x, y)
+            if have_new.is_set() and stats is not None:
+                # The slot already held an unsent frame — it has just been
+                # superseded.  Counting these is how link congestion becomes
+                # visible: a healthy link drops none.
+                stats.stale_dropped += 1
+            have_new.set()
 
     except WebSocketDisconnect:
         _LOGGER.info("joystick ws disconnected for %s", name)
     finally:
+        sender.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await sender
+        _DRIVING_UNTIL.pop(name, None)
         state.websockets.discard(ws)
         # Always stop on disconnect — explicit safety in case the browser closed
-        # mid-motion without sending a stick-release frame.
+        # mid-motion without sending a stick-release frame.  Unconditional and
+        # sent from this task (not the cancelled sender) so it runs even if the
+        # sender was mid-send when the socket dropped.
         with contextlib.suppress(Exception):
             await h.send_raw(h.commands.stop_and_not_save_task())
 
