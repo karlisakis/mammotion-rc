@@ -4,7 +4,7 @@
 # Settings → Add-ons → Add-on Store → ⋮ → Check for updates → Local add-ons.
 # Full guide in DOCS.md (shown on the add-on's Documentation tab).
 name: Mammotion RC
-version: "1.0.8"
+version: "1.1.0"
 slug: mammotion_rc
 description: Drive your Mammotion mower — joystick, live camera, status — via the HC33 BLE proxy
 url: https://github.com/karlisakis/mammotion-rc
