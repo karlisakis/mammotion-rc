@@ -62,10 +62,9 @@ span min 20–60 and max 55–100, so nothing can be inferred. `_device_limits()
 therefore returns None and the UI falls back to hardcoded bounds. The mower
 reporting 50 mm is the one hard constraint: its real range includes 50.
 
-**Step granularity is unknown.** No step/increment exists anywhere in the
-library — `DeviceLimits` carries only min/max. The UI's 5 mm step is a guess.
-If the hardware uses 10 mm detents from 30 (30/40/50/60/70), then 35 is
-unreachable and may be silently dropped or rounded — a live hypothesis.
+**Step granularity is not expressed in the library** (`DeviceLimits` carries
+only min/max), but hardware testing settled it: the deck is continuously
+positioned, so the UI's 5 mm step is safe.
 
 **There is no rejection message.** The driver layer is fire-and-forget: no
 proto message in the tree carries a per-command NACK for driver writes. A
@@ -99,38 +98,39 @@ sees nothing. `SysMowInfo.knife_height` is likewise parsed then ignored
    `/api/status` only reads the snapshot; it never requests a fresh report. So
    a height set while idle could legitimately show the old value for five
    minutes. Fixed: a height set now schedules `request_report_snapshot()` at
-   +1 s / +5 s / +12 s to cover motor travel.
+   +1 s / +4 s / +7 s to cover motor travel.
 
 Both defects made every manual test ambiguous, which is why they were fixed
 before any protocol hypothesis was tested.
 
-## Hypotheses as they stood before the hardware test (all now settled)
+## Hypotheses as they stood before the hardware test — all settled
 
-1. ~~**Firmware precondition — the lift motor won't run while docked/charging.**~~
-   **DEAD** — the successful runs above were on an undocked, idle mower, and
-   the *failing* driver-path run was under identical conditions.
-   This is the one difference in kind between cutter mode (a stored parameter;
-   nothing moves) and height (an actuator). An interlock while seated on
-   charging contacts would produce exactly "accepted, no error, nothing
-   happens". No source evidence either way — the library gates nothing. Test
-   undocked, on grass.
-2. ~~**Illegal detent.**~~ **DEAD** — the motor reports intermediate values
-   (49, 48, 41, 39) while travelling, so positioning is continuous.
-3. **Luba-2 uses a different path.** ✅ **CONFIRMED — this was the cause.** Upstream's HA integration branches: Luba 1
-   uses the sys-layer `set_blade_control`, while **Luba 2 and newer use
-   `operate_on_device` → `DrvMowCtrlByHand`**, which carries `cut_knife_height`.
-   Our blade on/off currently uses the Luba-1 path. Counter-evidence: the
-   driver layer carries a complete live-adjust triplet (write / read-back /
-   motion-progress), which only makes sense if standalone height changes are
-   supported. Worth probing with `main_ctrl=0, cut_knife_ctrl=0` (the
-   no-blade-spin form) — but verify on hardware that it does not spin blades.
-4. ~~**Job parameter only.**~~ **DEAD** — the standalone live set works. Height is a first-class field in `NavReqCoverPath`,
-   `NavPlanJobSet`, `NavStartJob` and `SysJobPlan`. `modify_route_information`
-   (`sub_cmd=3`) is the least destructive way to write it as a job param.
+1. ~~Firmware precondition (lift motor won't run while docked/charging)~~ —
+   **dead.** The failing driver-path run and the successful mowctrl runs were
+   under identical conditions: undocked, idle, on grass.
+2. ~~Illegal detent (35 unreachable)~~ — **dead.** The motor reports
+   intermediate values (49, 48, 41, 39) while travelling, so positioning is
+   continuous, not detented.
+3. **Luba-2 uses a different message** — ✅ **confirmed, this was the cause.**
+   Upstream's HA integration branches on device type: Luba 1 uses the sys-layer
+   `set_blade_control`, everything Luba-2-and-newer uses `operate_on_device` →
+   `DrvMowCtrlByHand`, which carries `cut_knife_height`. The driver layer's
+   live-adjust triplet (write / read-back / motion-progress) exists in the
+   proto but this firmware does not act on the write.
+4. ~~Job parameter only~~ — **dead.** The standalone live set works fine once
+   sent as `DrvMowCtrlByHand`.
 
-Excluded: value clamped to 0 by our own code (the log line shows what was
-applied); command lost on the wire (cutter mode proves the path); NAV
-misrouting (LUBA_VA classifies correctly).
+Excluded before testing: value clamped by our own code (the log shows what was
+applied); command lost on the wire (cutter mode proves the path works); NAV
+misrouting (`LUBA_VA` classifies correctly, rank 15 > Luba-2 gate).
+
+## Implication for blade on/off
+
+Blade start/stop has the same split upstream, and our code used the **Luba-1**
+`set_blade_control` path — so on this model it is likely a no-op for the same
+reason the height command was. Both now route through `operate_on_device` on
+Luba-2-and-newer devices. Unlike height, this was **not** verified from here:
+spinning blades on an unattended mower is not something to test remotely.
 
 ## How to test
 

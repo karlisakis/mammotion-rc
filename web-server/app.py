@@ -647,12 +647,41 @@ _ACTIONS = {
     # Job control: start the mower's planned task / cancel the running one.
     "start-job":  ("start_job",            {}),
     "cancel-job": ("cancel_job",           {}),
-    # Manual mowing: spin the blades up/down while driving by joystick.  The
-    # mower's own safety logic still applies (lift/tilt/bumper cut the blades
-    # regardless of what we send).
-    "blades-on":  ("set_blade_control",    {"on_off": 1}),
-    "blades-off": ("set_blade_control",    {"on_off": 0}),
+    # Manual mowing: spin the blades up/down while driving by joystick.  These
+    # two are handled specially in post_action (device-type dependent wire
+    # path) — the entries here only reserve the action names.  The mower's own
+    # safety logic still applies (lift/tilt/bumper cut the blades regardless of
+    # what we send).
+    "blades-on":  (None, {}),
+    "blades-off": (None, {}),
 }
+
+
+async def _send_blades(h, name: str, on: bool) -> str:
+    """Start/stop the blades, choosing the wire path by device generation.
+
+    Luba 1 uses the sys-layer SysKnifeControl (set_blade_control).  Luba 2 and
+    newer use DrvMowCtrlByHand via operate_on_device — the same split upstream's
+    HA integration makes.  This matters: on a Luba-VA/HM442 the equivalent
+    Luba-1 command for *cutting height* was accepted and silently ignored
+    (docs/blade-height-findings.md), so the Luba-1 blade command is very
+    probably a no-op on these models too.
+
+    DrvMowCtrlByHand carries the height alongside the blade control, so we pass
+    the mower's current height to avoid moving the deck as a side effect.
+    Returns the path used, for the log/response.
+    """
+    if DeviceType.is_luba1(name):
+        await h.send_raw(h.commands.set_blade_control(on_off=1 if on else 0))
+        return "set_blade_control"
+    height = _current_blade_height(h) or 60
+    await h.send_raw(h.commands.operate_on_device(
+        main_ctrl=1 if on else 0,
+        cut_knife_ctrl=1 if on else 0,
+        cut_knife_height=int(height),
+        max_run_speed=1.2,
+    ))
+    return "operate_on_device"
 
 
 @app.post("/api/action/{name}/{action}")
@@ -661,6 +690,10 @@ async def post_action(name: str, action: str):
     entry = _ACTIONS.get(action)
     if entry is None:
         raise HTTPException(400, f"unknown action {action!r}")
+    if action in ("blades-on", "blades-off"):
+        path = await _send_blades(h, name, on=(action == "blades-on"))
+        _LOGGER.info("%s for %s via %s", action, name, path)
+        return {"ok": True, "path": path}
     method, kwargs = entry
     cmd_bytes = getattr(h.commands, method)(**kwargs)
     await h.send_raw(cmd_bytes)
